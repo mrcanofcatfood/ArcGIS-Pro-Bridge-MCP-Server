@@ -664,7 +664,7 @@ def build_validate_project_data_code(
                     overall = "warn"
         else:
             checks.append({"layer": "unimproved_land_values", "exists": False, "status": "warn"})
-            warnings.append("land_values.gdb/unimimproved_land_values not found")
+            warnings.append("land_values.gdb/unimproved_land_values not found")
             if overall == "pass":
                 overall = "warn"
 
@@ -935,7 +935,7 @@ def build_weighted_suitability_code(
     raw_min = float(arcpy.Raster(result).minimum)
     raw_max = float(arcpy.Raster(result).maximum)
 
-    if NORMALIZE and (raw_min < EVAL_MIN or raw_max > EVAL_MAX):
+    if NORMALIZE:
         normalized = (result - raw_min) / (raw_max - raw_min) * (EVAL_MAX - EVAL_MIN) + EVAL_MIN
         normalized.save(OUTPUT_RASTER)
         output = arcpy.Raster(OUTPUT_RASTER)
@@ -1361,6 +1361,14 @@ def build_sensitivity_check_code(
     most_sensitive = max(weight_scenarios, key=lambda s: float(s["pct_cells_changed"]))
     least_sensitive = min(weight_scenarios, key=lambda s: float(s["pct_cells_changed"]))
 
+    # Clean up temp rasters from perturbation runs
+    for prefix in ["temp_alloc_", "temp_conflict_", "temp_conflict_thresh_"]:
+        for ras in arcpy.ListRasters(f"{prefix}*", "Raster"):
+            try:
+                arcpy.management.Delete(ras)
+            except Exception:
+                pass
+
     set_result({
         "total_scenarios": len(scenarios),
         "weight_perturbation_scenarios": len(weight_scenarios),
@@ -1426,6 +1434,11 @@ def build_export_suitability_map_code(
     if m is None:
         m = aprx.createMap(MAP_NAME, "MAP")
 
+    # Remove any existing layers from this raster to prevent accumulation on re-run
+    for old_lyr in m.listLayers():
+        if old_lyr.dataSource == RASTER_PATH:
+            m.removeLayer(old_lyr)
+
     m.addDataFromPath(RASTER_PATH)
     lyr = m.listLayers()[0]
 
@@ -1434,17 +1447,15 @@ def build_export_suitability_map_code(
         sym.updateColorizer("UniqueValuesColorizer")
         sym.renderer.classificationField = "Value"
         if CLASSIFICATION:
-            color_list = []
+            sym.renderer.groups.clear()
             for c in CLASSIFICATION:
-                color_list.append({
-                    "label": str(c["value"]),
-                    "values": [[c["value"]]],
-                    "color": {
-                        "type": "CIMRGBColor",
-                        "values": [{"r": c["rgb"][0], "g": c["rgb"][1], "b": c["rgb"][2]}],
-                    },
-                })
-            sym.renderer.groups = color_list
+                group = sym.renderer.groups[0].clone()
+                group.label = str(c["value"])
+                group.values = [[c["value"]]]
+                if hasattr(group, "color") and group.color:
+                    group.color.type = "CIMRGBColor"
+                    group.color.values = [c["rgb"][0], c["rgb"][1], c["rgb"][2], 100]
+                sym.renderer.groups.append(group)
     lyr.symbology = sym
 
     layouts = aprx.listLayouts()
@@ -1458,7 +1469,7 @@ def build_export_suitability_map_code(
         mf = map_frames[0]
         mf.map = m
     else:
-        mf = layout.createMapFrame(m, 15, 20, 270, 180, "MILLIMETERS")
+        mf = layout.createMapFrame(m, 15, 20, 270, 180, "Suitability_MapFrame", "MILLIMETERS")
 
     title_elements = layout.listElements("TEXT_ELEMENT")
     title_el = None

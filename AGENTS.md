@@ -39,6 +39,24 @@ inspect_gdb(gdb_path="path/to/data.gdb")
 - **Generate clip:** `clip_features`
 - **Execute ArcPy code:** `execute_arcpy_code` (requires user confirmation)
 
+### 4. (Optional) Real-Time ArcGIS Pro Interaction
+
+If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to interact with the live session:
+
+- **Check connectivity:** `pro_ping`
+- **Get active map:** `pro_get_active_map_name`
+- **List layers:** `pro_list_layers`
+- **Count features:** `pro_count_features(layer="Parcels")`
+- **Get layer schema:** `pro_get_layer_schema(layer="Parcels")`
+- **Select features:** `pro_select_by_attribute(layer="Parcels", where="ZONE = 'Residential'")`
+- **Zoom to layer:** `pro_zoom_to_layer(layer="Parcels")`
+- **Get extent:** `pro_get_current_extent()`
+- **Pan to extent:** `pro_pan_to_extent(xmin=500000, ymin=6900000, xmax=510000, ymax=6910000)`
+- **Clear selection:** `pro_clear_selection(layer="Parcels")`
+- **Get selection count:** `pro_get_selection_count(layer="Parcels")`
+
+> The `pro_ping` tool will return `"status": "unavailable"` with setup instructions if the Add-In is not reachable.
+
 ## Tool Reference
 
 | Tool | Purpose | Key Parameters |
@@ -52,6 +70,17 @@ inspect_gdb(gdb_path="path/to/data.gdb")
 | `buffer_features` | Buffer GP tool | `input_features`, `output_path`, `buffer_distance` |
 | `clip_features` | Clip GP tool | `input_features`, `clip_features`, `output_path` |
 | `execute_arcpy_code` | Run arbitrary ArcPy | `code`, `timeout_seconds` |
+| `pro_ping` | Ping Add-In pipe | None |
+| `pro_get_active_map_name` | Get active map name | None |
+| `pro_list_layers` | List all layers | None |
+| `pro_count_features` | Count features in layer | `layer` |
+| `pro_get_layer_schema` | Get field schema | `layer` |
+| `pro_select_by_attribute` | Select by SQL | `layer`, `where` |
+| `pro_zoom_to_layer` | Zoom to layer extent | `layer` |
+| `pro_get_current_extent` | Get map view extent | None |
+| `pro_pan_to_extent` | Pan to bounding box | `xmin`, `ymin`, `xmax`, `ymax` |
+| `pro_clear_selection` | Clear layer selection | `layer` (optional) |
+| `pro_get_selection_count` | Count selected features | `layer` |
 
 ## Resources
 
@@ -84,6 +113,7 @@ The server also exposes these MCP Resources:
 - `arcpy.mp.ArcGISProject("CURRENT")` is unavailable from outside Pro's Python window
 - `open_current_project=True` will fail with a clear error — always provide an explicit `.aprx` path
 - If Pro is open on the same `.aprx`, write operations will fail with a lock error
+- The `pro.*` tools require the APBridgeAddIn to be installed and ArcGIS Pro to be running
 
 ### Working with Projects
 
@@ -92,4 +122,4 @@ The server also exposes these MCP Resources:
 | ArcGIS Pro is **closed** | Use `project_path="C:\\path\\to\\project.aprx"` — reads from disk |
 | ArcGIS Pro is **open** (read-only) | Use `.aprx` archive reader — no live session access |
 | ArcGIS Pro is **open** (write) | Save project first, close Pro, then use `project_path` |
-| Need **real-time** access | Requires C# Add-In (see FUTURE_WORK.md) |
+| Need **real-time** access | Requires C# Add-In (see `addin/` directory) |

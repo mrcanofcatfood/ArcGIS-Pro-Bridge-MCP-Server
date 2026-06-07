@@ -17,6 +17,11 @@ from arcgis_aprx_archive import (
     read_project_context_from_archive,
     read_project_layers_from_archive,
 )
+from arcgis_mcp_named_pipe import (
+    AddInNotAvailableError,
+    AddInOperationError,
+    call_addin,
+)
 from arcgis_mcp_resources import (
     build_gdb_schema_resource_uri,
     build_project_context_resource_uri,
@@ -89,7 +94,9 @@ mcp = FastMCP(
     name=SERVER_NAME,
     instructions=(
         "Bridges AI agents with local ArcGIS Pro. "
-        "ArcPy logic executes via ArcGIS Pro's bundled Python subprocess."
+        "ArcPy logic executes via ArcGIS Pro's bundled Python subprocess. "
+        "pro.* tools interact with a live ArcGIS Pro session via the "
+        "APBridgeAddIn C# Add-In over Named Pipes."
     ),
     json_response=True,
 )
@@ -1196,13 +1203,19 @@ def conflict_analysis(
     conservation_raster: str,
     urban_raster: str,
     threshold: float = 4.0,
-    output_gdb: str = "",
+    output_gdb: str | None = None,
     land_use_raster: str | None = None,
     cell_size_area_ha: float | None = None,
     workspace: str | None = None,
     timeout_seconds: int = 600,
 ) -> dict[str, Any]:
     """Identify conflict zones and create allocation map from two suitability rasters."""
+    if not output_gdb:
+        return {
+            "tool": "conflict_analysis",
+            "status": "error",
+            "message": "output_gdb is required and cannot be empty",
+        }
     try:
         conservation_raster = _validate_gis_path(conservation_raster, "conservation_raster")
         urban_raster = _validate_gis_path(urban_raster, "urban_raster")
@@ -1411,6 +1424,1310 @@ def export_suitability_map(
             "dpi": dpi,
         },
     )
+
+
+def _call_addin(op: str, args: dict[str, str] | None = None) -> dict[str, Any]:
+    try:
+        data = call_addin(op, args)
+        return {"status": "ok", "data": data}
+    except AddInNotAvailableError as exc:
+        return {
+            "status": "unavailable",
+            "message": str(exc),
+            "next_step": (
+                "Ensure ArcGIS Pro is running with the APBridgeAddIn loaded "
+                "(it auto-starts on Pro launch after installation). "
+                "If the Add-In is not installed, build the project in "
+                "addin/APBridgeAddIn/ with Visual Studio and install the "
+                "resulting .esriAddInX file."
+            ),
+        }
+    except AddInOperationError as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+@mcp.tool()
+def pro_ping() -> dict[str, Any]:
+    """Ping the ArcGIS Pro Add-In to verify Named Pipe connectivity."""
+    return _call_addin("pro.ping")
+
+
+@mcp.tool()
+def pro_get_active_map_name() -> dict[str, Any]:
+    """Get the name of the active map in ArcGIS Pro."""
+    return _call_addin("pro.getActiveMapName")
+
+
+@mcp.tool()
+def pro_list_layers() -> dict[str, Any]:
+    """List all layers in the active ArcGIS Pro map with visibility and type."""
+    return _call_addin("pro.listLayers")
+
+
+@mcp.tool()
+def pro_count_features(layer: str) -> dict[str, Any]:
+    """Count features in a layer by name in the active ArcGIS Pro map."""
+    return _call_addin("pro.countFeatures", {"layer": layer})
+
+
+@mcp.tool()
+def pro_get_layer_schema(layer: str) -> dict[str, Any]:
+    """Get field schema (name, type, alias, length, precision, etc.) for a layer."""
+    return _call_addin("pro.getLayerSchema", {"layer": layer})
+
+
+@mcp.tool()
+def pro_get_selection_count(layer: str) -> dict[str, Any]:
+    """Count selected features in a layer by name."""
+    return _call_addin("pro.getSelectionCount", {"layer": layer})
+
+
+@mcp.tool()
+def pro_select_by_attribute(layer: str, where: str) -> dict[str, Any]:
+    """Select features in a layer using a SQL where clause."""
+    return _call_addin("pro.selectByAttribute", {"layer": layer, "where": where})
+
+
+@mcp.tool()
+def pro_clear_selection(layer: str | None = None) -> dict[str, Any]:
+    """Clear selection on a specific layer, or all layers if no layer specified."""
+    args = {}
+    if layer:
+        args["layer"] = layer
+    return _call_addin("pro.clearSelection", args)
+
+
+@mcp.tool()
+def pro_zoom_to_layer(layer: str) -> dict[str, Any]:
+    """Zoom the active map view to a layer's extent."""
+    return _call_addin("pro.zoomToLayer", {"layer": layer})
+
+
+@mcp.tool()
+def pro_get_current_extent() -> dict[str, Any]:
+    """Get the current map view extent (xmin, ymin, xmax, ymax, spatial reference)."""
+    return _call_addin("pro.getCurrentExtent")
+
+
+@mcp.tool()
+def pro_pan_to_extent(
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+) -> dict[str, Any]:
+    """Pan the active map view to a specified bounding box extent."""
+    return _call_addin(
+        "pro.panToExtent",
+        {
+            "xmin": str(xmin),
+            "ymin": str(ymin),
+            "xmax": str(xmax),
+            "ymax": str(ymax),
+        },
+    )
+
+
+@mcp.tool()
+def pro_get_camera() -> dict[str, Any]:
+    """Get the current camera position from the active ArcGIS Pro map view."""
+    return _call_addin("pro.getCamera")
+
+
+@mcp.tool()
+def pro_set_layer_visibility(layer: str, visible: bool) -> dict[str, Any]:
+    """Set the visibility of a layer by name in the active ArcGIS Pro map."""
+    return _call_addin(
+        "pro.setLayerVisibility",
+        {"layer": layer, "visible": str(visible).lower()},
+    )
+
+
+@mcp.tool()
+def pro_get_layer_extent(layer: str) -> dict[str, Any]:
+    """Get the full spatial extent (xmin, ymin, xmax, ymax) of a feature layer."""
+    return _call_addin("pro.getLayerExtent", {"layer": layer})
+
+
+@mcp.tool()
+def pro_select_by_rectangle(
+    layer: str,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    selection_type: str = "NEW",
+) -> dict[str, Any]:
+    """Select features in a layer within a rectangle. selection_type: NEW, ADD, SUBTRACT, or AND."""
+    return _call_addin(
+        "pro.selectByRectangle",
+        {
+            "layer": layer,
+            "xmin": str(xmin),
+            "ymin": str(ymin),
+            "xmax": str(xmax),
+            "ymax": str(ymax),
+            "selectionType": selection_type,
+        },
+    )
+
+
+@mcp.tool()
+def pro_switch_selection(layer: str | None = None) -> dict[str, Any]:
+    """Invert the selection on a specific layer, or all layers if none specified."""
+    args = {}
+    if layer:
+        args["layer"] = layer
+    return _call_addin("pro.switchSelection", args)
+
+
+@mcp.tool()
+def pro_get_feature_by_oid(layer: str, oid: int) -> dict[str, Any]:
+    """Get all attribute values for a feature by its ObjectID."""
+    return _call_addin("pro.getFeatureByOid", {"layer": layer, "oid": str(oid)})
+
+
+@mcp.tool()
+def pro_undo_edit() -> dict[str, Any]:
+    """Undo the last edit operation in ArcGIS Pro."""
+    return _call_addin("pro.undoEdit")
+
+
+@mcp.tool()
+def pro_redo_edit() -> dict[str, Any]:
+    """Redo the last undone edit operation in ArcGIS Pro."""
+    return _call_addin("pro.redoEdit")
+
+
+@mcp.tool()
+def pro_set_active_tool(tool: str) -> dict[str, Any]:
+    """Set the active map tool by DAML ID (e.g. esri_mapping_exploreTool)."""
+    return _call_addin("pro.setActiveTool", {"tool": tool})
+
+
+@mcp.tool()
+def pro_is_3d() -> dict[str, Any]:
+    """Check if the active map view is a 3D scene (GlobalScene or LocalScene)."""
+    return _call_addin("pro.is3d")
+
+
+@mcp.tool()
+def pro_get_layer_renderer(layer: str) -> dict[str, Any]:
+    """Get the renderer type and classification field for a layer."""
+    return _call_addin("pro.getLayerRenderer", {"layer": layer})
+
+
+@mcp.tool()
+def pro_set_layer_color(layer: str, r: int, g: int, b: int) -> dict[str, Any]:
+    """Set the fill color for layers with a simple renderer using RGB values (0-255 each)."""
+    return _call_addin(
+        "pro.setLayerColor",
+        {"layer": layer, "r": str(r), "g": str(g), "b": str(b)},
+    )
+
+
+@mcp.tool()
+def pro_remove_layer(layer: str) -> dict[str, Any]:
+    """Remove a layer from the active ArcGIS Pro map by name."""
+    return _call_addin("pro.removeLayer", {"layer": layer})
+
+
+@mcp.tool()
+def pro_add_layer_from_file(path: str) -> dict[str, Any]:
+    """Add a layer from a .lyrx file or feature class path to the active ArcGIS Pro map."""
+    return _call_addin("pro.addLayerFromFile", {"path": path})
+
+
+@mcp.tool()
+def pro_select_by_polygon(
+    layer: str,
+    coordinates: str,
+    selection_type: str = "NEW",
+) -> dict[str, Any]:
+    """Select features in a layer by polygon coordinates. Space-separated 'x,y' pairs.
+    selection_type: NEW, ADD, SUBTRACT, or AND."""
+    return _call_addin(
+        "pro.selectByPolygon",
+        {
+            "layer": layer,
+            "coordinates": coordinates,
+            "selectionType": selection_type,
+        },
+    )
+
+
+@mcp.tool()
+def pro_list_layouts() -> dict[str, Any]:
+    """List all layouts in the current ArcGIS Pro project."""
+    return _call_addin("pro.listLayouts")
+
+
+@mcp.tool()
+def pro_get_project_properties() -> dict[str, Any]:
+    """Get project metadata including name, path, default geodatabase, summary, and tags."""
+    return _call_addin("pro.getProjectProperties")
+
+
+@mcp.tool()
+def pro_get_geometry_distance(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+) -> dict[str, Any]:
+    """Calculate Euclidean distance between two map coordinates."""
+    return _call_addin(
+        "pro.getGeometryDistance",
+        {
+            "x1": str(x1),
+            "y1": str(y1),
+            "x2": str(x2),
+            "y2": str(y2),
+        },
+    )
+
+
+@mcp.tool()
+def pro_set_layer_transparency(layer: str, transparency: float) -> dict[str, Any]:
+    """Set layer transparency percentage (0 = opaque, 100 = fully transparent)."""
+    return _call_addin(
+        "pro.setLayerTransparency",
+        {"layer": layer, "transparency": str(transparency)},
+    )
+
+
+@mcp.tool()
+def pro_get_all_map_names() -> dict[str, Any]:
+    """List all maps in the current ArcGIS Pro project."""
+    return _call_addin("pro.getAllMapNames")
+
+
+@mcp.tool()
+def pro_get_map_frame(
+    layout_name: str,
+    map_frame_name: str | None = None,
+) -> dict[str, Any]:
+    """Get map frame properties (camera, map name, dimensions) from a layout."""
+    args: dict[str, str] = {"layoutName": layout_name}
+    if map_frame_name:
+        args["mapFrameName"] = map_frame_name
+    return _call_addin("pro.getMapFrame", args)
+
+
+@mcp.tool()
+def pro_select_by_layer(
+    target_layer: str,
+    source_layer: str,
+    spatial_relationship: str = "Intersects",
+    selection_type: str = "NEW",
+) -> dict[str, Any]:
+    """Select features by spatial relationship to another layer."""
+    return _call_addin(
+        "pro.selectByLayer",
+        {
+            "targetLayer": target_layer,
+            "sourceLayer": source_layer,
+            "spatialRelationship": spatial_relationship,
+            "selectionType": selection_type,
+        },
+    )
+
+
+@mcp.tool()
+def pro_get_features_by_extent(
+    layer: str,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    fields: str | None = None,
+    max_features: int = 100,
+) -> dict[str, Any]:
+    """Get feature attributes within a bounding box extent. Optionally limit fields."""
+    args: dict[str, str] = {
+        "layer": layer,
+        "xmin": str(xmin),
+        "ymin": str(ymin),
+        "xmax": str(xmax),
+        "ymax": str(ymax),
+        "maxFeatures": str(max_features),
+    }
+    if fields:
+        args["fields"] = fields
+    return _call_addin("pro.getFeaturesByExtent", args)
+
+
+@mcp.tool()
+def pro_delete_features_by_oid(layer: str, oids: str) -> dict[str, Any]:
+    """Delete features by comma-separated OIDs in a layer (e.g. '1,2,3')."""
+    return _call_addin("pro.deleteFeaturesByOid", {"layer": layer, "oids": oids})
+
+
+@mcp.tool()
+def pro_update_feature_attributes(
+    layer: str,
+    oid: int,
+    attributes: str,
+) -> dict[str, Any]:
+    """Update attributes of a feature by OID. Attributes as JSON string."""
+    return _call_addin(
+        "pro.updateFeatureAttributes",
+        {"layer": layer, "oid": str(oid), "attributes": attributes},
+    )
+
+
+@mcp.tool()
+def pro_create_point_feature(
+    layer: str,
+    x: float,
+    y: float,
+    wkid: int | None = None,
+    attributes: str | None = None,
+) -> dict[str, Any]:
+    """Create a point feature at (x, y) with optional WKID and JSON attributes."""
+    args: dict[str, str] = {
+        "layer": layer,
+        "x": str(x),
+        "y": str(y),
+    }
+    if wkid is not None:
+        args["wkid"] = str(wkid)
+    if attributes is not None:
+        args["attributes"] = attributes
+    return _call_addin("pro.createPointFeature", args)
+
+
+@mcp.tool()
+def pro_apply_unique_value_renderer(
+    layer: str,
+    field: str,
+    color_ramp: str | None = None,
+) -> dict[str, Any]:
+    """Apply a unique value renderer to a layer based on a field's distinct values."""
+    args: dict[str, str] = {"layer": layer, "field": field}
+    if color_ramp is not None:
+        args["colorRamp"] = color_ramp
+    return _call_addin("pro.applyUniqueValueRenderer", args)
+
+
+@mcp.tool()
+def pro_apply_class_breaks_renderer(
+    layer: str,
+    field: str,
+    break_count: int = 5,
+) -> dict[str, Any]:
+    """Apply a class breaks renderer using equal interval classification."""
+    return _call_addin(
+        "pro.applyClassBreaksRenderer",
+        {"layer": layer, "field": field, "breakCount": str(break_count)},
+    )
+
+
+@mcp.tool()
+def pro_get_elevation_sources() -> dict[str, Any]:
+    """List elevation surface sources in the active scene (ground)."""
+    return _call_addin("pro.getElevationSources")
+
+
+@mcp.tool()
+def pro_set_ground_opacity(opacity: float) -> dict[str, Any]:
+    """Set the ground surface opacity (0=transparent, 100=opaque) in the active scene."""
+    return _call_addin("pro.setGroundOpacity", {"opacity": str(opacity)})
+
+
+@mcp.tool()
+def pro_get_active_tool() -> dict[str, Any]:
+    """Get the DAML ID of the currently active map tool."""
+    return _call_addin("pro.getActiveTool")
+
+
+@mcp.tool()
+def pro_list_field_values(
+    layer: str,
+    field: str,
+    max_values: int = 100,
+) -> dict[str, Any]:
+    """List distinct field values for a layer. Use max_values to cap results."""
+    return _call_addin(
+        "pro.listFieldValues",
+        {"layer": layer, "field": field, "maxValues": str(max_values)},
+    )
+
+
+@mcp.tool()
+def pro_add_field(
+    layer: str,
+    field_name: str,
+    field_type: str,
+    precision: int | None = None,
+    scale: int | None = None,
+    length: int | None = None,
+) -> dict[str, Any]:
+    """Add a new field to a layer's feature class. field_type: Double, Integer, Text, Date, etc."""
+    args: dict[str, str] = {
+        "layer": layer,
+        "fieldName": field_name,
+        "fieldType": field_type,
+    }
+    if precision is not None:
+        args["precision"] = str(precision)
+    if scale is not None:
+        args["scale"] = str(scale)
+    if length is not None:
+        args["length"] = str(length)
+    return _call_addin("pro.addField", args)
+
+
+@mcp.tool()
+def pro_delete_field(layer: str, field_name: str) -> dict[str, Any]:
+    """Delete a field from a layer's feature class. Cannot delete required fields."""
+    return _call_addin(
+        "pro.deleteField",
+        {"layer": layer, "fieldName": field_name},
+    )
+
+
+@mcp.tool()
+def pro_create_polygon_feature(
+    layer: str,
+    coordinates: str,
+    wkid: int | None = None,
+    attributes: str | None = None,
+) -> dict[str, Any]:
+    """Create a polygon feature from space-separated 'x,y' coordinates (min 3 pairs)."""
+    args: dict[str, str] = {"layer": layer, "coordinates": coordinates}
+    if wkid is not None:
+        args["wkid"] = str(wkid)
+    if attributes is not None:
+        args["attributes"] = attributes
+    return _call_addin("pro.createPolygonFeature", args)
+
+
+@mcp.tool()
+def pro_create_line_feature(
+    layer: str,
+    coordinates: str,
+    wkid: int | None = None,
+    attributes: str | None = None,
+) -> dict[str, Any]:
+    """Create a line/polyline feature from space-separated 'x,y' coordinates (min 2 pairs)."""
+    args: dict[str, str] = {"layer": layer, "coordinates": coordinates}
+    if wkid is not None:
+        args["wkid"] = str(wkid)
+    if attributes is not None:
+        args["attributes"] = attributes
+    return _call_addin("pro.createLineFeature", args)
+
+
+@mcp.tool()
+def pro_set_map_scale(scale: float) -> dict[str, Any]:
+    """Set the active map view to a specific scale."""
+    return _call_addin("pro.setMapScale", {"scale": str(scale)})
+
+
+@mcp.tool()
+def pro_get_map_scale() -> dict[str, Any]:
+    """Get the current scale of the active map view."""
+    return _call_addin("pro.getMapScale")
+
+
+@mcp.tool()
+def pro_zoom_to_selected(layer: str | None = None) -> dict[str, Any]:
+    """Zoom to selected features. Optionally scope to a specific layer."""
+    args = {}
+    if layer:
+        args["layer"] = layer
+    return _call_addin("pro.zoomToSelected", args)
+
+
+@mcp.tool()
+def pro_get_edit_state() -> dict[str, Any]:
+    """Get undo and redo operation counts."""
+    return _call_addin("pro.getEditState")
+
+
+@mcp.tool()
+def pro_set_snapping(enabled: bool) -> dict[str, Any]:
+    """Enable or disable map snapping."""
+    return _call_addin("pro.setSnapping", {"enabled": str(enabled).lower()})
+
+
+@mcp.tool()
+def pro_delete_bookmark(name: str) -> dict[str, Any]:
+    """Delete a bookmark by name from the active map."""
+    return _call_addin("pro.deleteBookmark", {"name": name})
+
+
+@mcp.tool()
+def pro_flash_selection(layer: str) -> dict[str, Any]:
+    """Visually flash selected features in a layer on the map."""
+    return _call_addin("pro.flashSelection", {"layer": layer})
+
+
+@mcp.tool()
+def pro_select_all(layer: str) -> dict[str, Any]:
+    """Select all features in a layer."""
+    return _call_addin("pro.selectAll", {"layer": layer})
+
+
+@mcp.tool()
+def pro_set_status_bar_message(message: str) -> dict[str, Any]:
+    """Set the ArcGIS Pro status bar message."""
+    return _call_addin("pro.setStatusBarMessage", {"message": message})
+
+
+@mcp.tool()
+def pro_list_standalone_tables() -> dict[str, Any]:
+    """List non-spatial standalone tables in the current project."""
+    return _call_addin("pro.listStandaloneTables")
+
+
+@mcp.tool()
+def pro_list_gp_history(max_items: int = 20) -> dict[str, Any]:
+    """List recent geoprocessing history items from the project."""
+    return _call_addin("pro.listGpHistory", {"maxItems": str(max_items)})
+
+
+@mcp.tool()
+def pro_is_time_enabled() -> dict[str, Any]:
+    """Check if the time slider is enabled on the active map."""
+    return _call_addin("pro.isTimeEnabled")
+
+
+@mcp.tool()
+def pro_get_time_extent() -> dict[str, Any]:
+    """Get the current time extent of the active map (start/end)."""
+    return _call_addin("pro.getTimeExtent")
+
+
+@mcp.tool()
+def pro_set_time_extent(start: str, end: str) -> dict[str, Any]:
+    """Set the map time extent. Dates as ISO strings (e.g. '2020-01-01T00:00:00')."""
+    return _call_addin("pro.setTimeExtent", {"start": start, "end": end})
+
+
+@mcp.tool()
+def pro_list_layout_elements(layout_name: str) -> dict[str, Any]:
+    """List all elements (graphics, map frames, surrounds) in a layout."""
+    return _call_addin("pro.listLayoutElements", {"layoutName": layout_name})
+
+
+@mcp.tool()
+def pro_rename_field(layer: str, old_name: str, new_name: str) -> dict[str, Any]:
+    """Rename a field on a feature layer."""
+    return _call_addin(
+        "pro.renameField",
+        {"layer": layer, "oldName": old_name, "newName": new_name},
+    )
+
+
+@mcp.tool()
+def pro_get_layer_description(layer: str) -> dict[str, Any]:
+    """Get the description text for a layer (shown in TOC tooltips)."""
+    return _call_addin("pro.getLayerDescription", {"layer": layer})
+
+
+@mcp.tool()
+def pro_set_layer_description(layer: str, description: str) -> dict[str, Any]:
+    """Set the description text for a layer."""
+    return _call_addin(
+        "pro.setLayerDescription",
+        {"layer": layer, "description": description},
+    )
+
+
+@mcp.tool()
+def pro_list_scene_layer_types() -> dict[str, Any]:
+    """List layers with scene/3D type info (FeatureLayer, PointCloudLayer, SceneLayer, etc.)."""
+    return _call_addin("pro.listSceneLayerTypes")
+
+
+@mcp.tool()
+def pro_count_features_by_expression(layer: str, where: str) -> dict[str, Any]:
+    """Count features in a layer matching a SQL where clause."""
+    return _call_addin(
+        "pro.countFeaturesByExpression",
+        {"layer": layer, "where": where},
+    )
+
+
+# --- Phase 7: Advanced Editing & GP ---
+
+
+@mcp.tool()
+def pro_split_features(
+    layer: str, cut_geometry: str
+) -> dict[str, Any]:
+    """Split features intersecting a cutting geometry (GeoJSON polyline/polygon)."""
+    return _call_addin(
+        "pro.splitFeatures",
+        {"layer": layer, "cutGeometry": cut_geometry},
+    )
+
+
+@mcp.tool()
+def pro_merge_features(
+    layer: str, object_ids: str, target_oid: int
+) -> dict[str, Any]:
+    """Merge multiple features. object_ids: JSON array of OIDs, target_oid: survivor."""
+    return _call_addin(
+        "pro.mergeFeatures",
+        {"layer": layer, "objectIds": object_ids, "targetOid": str(target_oid)},
+    )
+
+
+@mcp.tool()
+def pro_run_gp_tool(
+    tool_name: str, parameters: str
+) -> dict[str, Any]:
+    """Execute an ArcGIS Geoprocessing tool by name. parameters is a JSON array of values."""
+    return _call_addin(
+        "pro.runGpTool",
+        {"toolName": tool_name, "parameters": parameters},
+    )
+
+
+@mcp.tool()
+def pro_list_gp_tools(
+    search_text: str | None = None,
+    max_results: int = 50,
+) -> dict[str, Any]:
+    """List GP tools from project toolboxes, optionally filtered by search_text."""
+    return _call_addin(
+        "pro.listGpTools",
+        {"searchText": search_text or "", "maxResults": str(max_results)},
+    )
+
+
+@mcp.tool()
+def pro_copy_features(
+    layer: str, output_path: str
+) -> dict[str, Any]:
+    """Copy features to a new feature class using the CopyFeatures GP tool."""
+    return _call_addin(
+        "pro.copyFeatures",
+        {"layer": layer, "outputPath": output_path},
+    )
+
+
+@mcp.tool()
+def pro_rename_layer(
+    layer: str, new_name: str
+) -> dict[str, Any]:
+    """Rename a layer in the current map."""
+    return _call_addin(
+        "pro.renameLayer",
+        {"layer": layer, "newName": new_name},
+    )
+
+
+@mcp.tool()
+def pro_get_layer_statistics(
+    layer: str, field: str
+) -> dict[str, Any]:
+    """Compute min, max, mean, stddev, count, and null count for a numeric field."""
+    return _call_addin(
+        "pro.getLayerStatistics",
+        {"layer": layer, "field": field},
+    )
+
+
+@mcp.tool()
+def pro_project_geometry(
+    x: float, y: float, from_wkid: int, to_wkid: int
+) -> dict[str, Any]:
+    """Project a point from one spatial reference to another using GeometryEngine."""
+    return _call_addin(
+        "pro.projectGeometry",
+        {
+            "x": str(x),
+            "y": str(y),
+            "fromWkid": str(from_wkid),
+            "toWkid": str(to_wkid),
+        },
+    )
+
+
+# --- Phase 8: Layout & Map Automation ---
+
+
+@mcp.tool()
+def pro_add_layout_text(
+    layout_name: str,
+    text: str,
+    x: float,
+    y: float,
+    font_size: float = 12,
+    color_rgb: str | None = None,
+) -> dict[str, Any]:
+    """Add a text element to a layout."""
+    args = {
+        "layoutName": layout_name, "text": text,
+        "x": str(x), "y": str(y), "fontSize": str(font_size),
+    }
+    if color_rgb:
+        args["colorRgb"] = color_rgb
+    return _call_addin("pro.addLayoutText", args)
+
+
+@mcp.tool()
+def pro_add_layout_picture(
+    layout_name: str,
+    image_path: str,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> dict[str, Any]:
+    """Add a picture/image element to a layout from a file path."""
+    return _call_addin(
+        "pro.addLayoutPicture",
+        {
+            "layoutName": layout_name,
+            "imagePath": image_path,
+            "x": str(x),
+            "y": str(y),
+            "width": str(width),
+            "height": str(height),
+        },
+    )
+
+
+@mcp.tool()
+def pro_add_layout_legend(
+    layout_name: str,
+    x: float,
+    y: float,
+    map_frame_name: str | None = None,
+) -> dict[str, Any]:
+    """Add a legend to a layout's map frame."""
+    args = {"layoutName": layout_name, "x": str(x), "y": str(y)}
+    if map_frame_name:
+        args["mapFrameName"] = map_frame_name
+    return _call_addin("pro.addLayoutLegend", args)
+
+
+@mcp.tool()
+def pro_add_layout_north_arrow(
+    layout_name: str,
+    map_frame_name: str,
+    x: float,
+    y: float,
+) -> dict[str, Any]:
+    """Add a north arrow to a layout's map frame."""
+    return _call_addin(
+        "pro.addLayoutNorthArrow",
+        {
+            "layoutName": layout_name,
+            "mapFrameName": map_frame_name,
+            "x": str(x),
+            "y": str(y),
+        },
+    )
+
+
+@mcp.tool()
+def pro_remove_layout_element(
+    layout_name: str,
+    element_name: str,
+) -> dict[str, Any]:
+    """Remove an element from a layout by name."""
+    return _call_addin(
+        "pro.removeLayoutElement",
+        {"layoutName": layout_name, "elementName": element_name},
+    )
+
+
+@mcp.tool()
+def pro_create_layout(
+    layout_name: str,
+    width: float,
+    height: float,
+    units: str = "MM",
+) -> dict[str, Any]:
+    """Create a new layout in the project and auto-save."""
+    return _call_addin(
+        "pro.createLayout",
+        {
+            "layoutName": layout_name,
+            "width": str(width),
+            "height": str(height),
+            "units": units,
+        },
+    )
+
+
+@mcp.tool()
+def pro_create_map(
+    map_name: str,
+    map_type: str = "Map",
+    basemap: str | None = None,
+) -> dict[str, Any]:
+    """Create a new map (Map/LocalScene/GlobalScene), activate it, and auto-save."""
+    args = {"mapName": map_name, "mapType": map_type}
+    if basemap:
+        args["basemap"] = basemap
+    return _call_addin("pro.createMap", args)
+
+
+@mcp.tool()
+def pro_add_basemap(
+    basemap_name: str,
+) -> dict[str, Any]:
+    """Set the basemap of the active map (Streets, Imagery, Topographic, etc.)."""
+    return _call_addin(
+        "pro.addBasemap",
+        {"basemapName": basemap_name},
+    )
+
+
+# --- Phase 9: Advanced 3D & Visualization ---
+
+
+@mcp.tool()
+def pro_set_atmosphere(
+    fog_density: float,
+    horizon_fog: bool = False,
+    fog_color: str | None = None,
+) -> dict[str, Any]:
+    """Set atmospheric effects in a scene (fog density 0-100, optional horizon fog and RGB color)."""
+    args = {"fogDensity": str(fog_density), "horizonFog": str(horizon_fog).lower()}
+    if fog_color:
+        args["fogColor"] = fog_color
+    return _call_addin("pro.setAtmosphere", args)
+
+
+@mcp.tool()
+def pro_set_sun_position(
+    azimuth: float,
+    altitude: float,
+) -> dict[str, Any]:
+    """Set the sun position in a scene (azimuth 0-360, altitude 0-90)."""
+    return _call_addin(
+        "pro.setSunPosition",
+        {"azimuth": str(azimuth), "altitude": str(altitude)},
+    )
+
+
+@mcp.tool()
+def pro_get_sun_position() -> dict[str, Any]:
+    """Get the current sun azimuth and altitude in a scene."""
+    return _call_addin("pro.getSunPosition")
+
+
+@mcp.tool()
+def pro_explore_3d(
+    x: float,
+    y: float,
+    target_z: float,
+    distance: float,
+    heading_delta: float | None = None,
+    pitch_delta: float | None = None,
+) -> dict[str, Any]:
+    """Orbit/navigate camera to look at a 3D point from a given distance."""
+    args = {
+        "x": str(x), "y": str(y),
+        "targetZ": str(target_z), "distance": str(distance),
+    }
+    if heading_delta is not None:
+        args["headingDelta"] = str(heading_delta)
+    if pitch_delta is not None:
+        args["pitchDelta"] = str(pitch_delta)
+    return _call_addin("pro.explore3D", args)
+
+
+@mcp.tool()
+def pro_set_layer_elevation(
+    layer: str,
+    elevation_mode: str,
+    z_offset: float,
+) -> dict[str, Any]:
+    """Set elevation mode (absolute/relative/dra) and Z offset for a layer in a scene."""
+    return _call_addin(
+        "pro.setLayerElevation",
+        {"layer": layer, "elevationMode": elevation_mode, "zOffset": str(z_offset)},
+    )
+
+
+@mcp.tool()
+def pro_set_scene_background(
+    r: int,
+    g: int,
+    b: int,
+    background_type: str = "color",
+) -> dict[str, Any]:
+    """Set the scene background color (r,g,b 0-255) and type (color/none)."""
+    return _call_addin(
+        "pro.setSceneBackground",
+        {"r": str(r), "g": str(g), "b": str(b), "backgroundType": background_type},
+    )
+
+
+# --- Phase 10: Project & Data Management ---
+
+
+@mcp.tool()
+def pro_create_feature_class(
+    gdb_path: str,
+    name: str,
+    geometry_type: str,
+    wkid: int | None = None,
+    fields_json: str | None = None,
+) -> dict[str, Any]:
+    """Create a feature class in a geodatabase (geometry_type: Point/Polyline/Polygon)."""
+    args = {"gdbPath": gdb_path, "name": name, "geometryType": geometry_type}
+    if wkid is not None:
+        args["wkid"] = str(wkid)
+    if fields_json is not None:
+        args["fieldsJson"] = fields_json
+    return _call_addin("pro.createFeatureClass", args)
+
+
+@mcp.tool()
+def pro_delete_feature_class(
+    path: str,
+) -> dict[str, Any]:
+    """Delete a feature class or table by full path."""
+    return _call_addin("pro.deleteFeatureClass", {"path": path})
+
+
+@mcp.tool()
+def pro_save_project() -> dict[str, Any]:
+    """Save the current ArcGIS Pro project."""
+    return _call_addin("pro.saveProject")
+
+
+@mcp.tool()
+def pro_add_attribute_index(
+    layer: str,
+    field: str,
+    index_name: str | None = None,
+    unique: bool = False,
+) -> dict[str, Any]:
+    """Add an attribute index on a field for faster queries."""
+    args = {"layer": layer, "field": field, "indexName": index_name or f"idx_{field}", "unique": str(unique).lower()}
+    return _call_addin("pro.addAttributeIndex", args)
+
+
+@mcp.tool()
+def pro_search_address(
+    address: str,
+    max_results: int = 10,
+) -> dict[str, Any]:
+    """Search for an address or place using the map's locators."""
+    return _call_addin(
+        "pro.searchAddress",
+        {"address": address, "maxResults": str(max_results)},
+    )
+
+
+@mcp.tool()
+def pro_open_attribute_table(
+    layer: str,
+) -> dict[str, Any]:
+    """Open the attribute table view for a layer."""
+    return _call_addin(
+        "pro.openAttributeTable",
+        {"layer": layer},
+    )
+
+
+# --- Phase 11: Data Exchange ---
+
+
+@mcp.tool()
+def pro_export_to_csv(
+    layer: str,
+    output_path: str,
+) -> dict[str, Any]:
+    """Export layer attribute table to a CSV file."""
+    return _call_addin(
+        "pro.exportToCsv",
+        {"layer": layer, "outputPath": output_path},
+    )
+
+
+@mcp.tool()
+def pro_export_to_geo_json(
+    layer: str,
+    output_path: str,
+) -> dict[str, Any]:
+    """Export layer features to a GeoJSON file."""
+    return _call_addin(
+        "pro.exportToGeoJSON",
+        {"layer": layer, "outputPath": output_path},
+    )
+
+
+@mcp.tool()
+def pro_import_csv(
+    csv_path: str,
+    gdb_path: str,
+    fc_name: str,
+    x_field: str,
+    y_field: str,
+    wkid: int = 4326,
+) -> dict[str, Any]:
+    """Import a CSV file as a point feature class (creates FC if needed)."""
+    return _call_addin(
+        "pro.importCsv",
+        {
+            "csvPath": csv_path, "gdbPath": gdb_path,
+            "fcName": fc_name, "xField": x_field,
+            "yField": y_field, "wkid": str(wkid),
+        },
+    )
+
+
+@mcp.tool()
+def pro_export_to_shapefile(
+    layer: str,
+    output_path: str,
+) -> dict[str, Any]:
+    """Export a layer to a shapefile."""
+    return _call_addin(
+        "pro.exportToShapefile",
+        {"layer": layer, "outputPath": output_path},
+    )
+
+
+@mcp.tool()
+def pro_export_to_kml(
+    layer: str,
+    output_path: str,
+) -> dict[str, Any]:
+    """Export a layer to a KML file."""
+    return _call_addin(
+        "pro.exportToKml",
+        {"layer": layer, "outputPath": output_path},
+    )
+
+
+@mcp.tool()
+def pro_import_geo_json(
+    geojson_path: str,
+    gdb_path: str,
+    fc_name: str,
+) -> dict[str, Any]:
+    """Import a GeoJSON file as a feature class (point, line, or polygon)."""
+    return _call_addin(
+        "pro.importGeoJSON",
+        {
+            "geojsonPath": geojson_path,
+            "gdbPath": gdb_path,
+            "fcName": fc_name,
+        },
+    )
+
+
+# --- Phase 12: Pro GUI Automation ---
+
+
+@mcp.tool()
+def pro_show_message(
+    message: str,
+    type: str = "info",
+    title: str | None = None,
+) -> dict[str, Any]:
+    """Show a message dialog in ArcGIS Pro (type: info/warning/error)."""
+    args = {"message": message, "type": type}
+    if title:
+        args["title"] = title
+    return _call_addin("pro.showMessage", args)
+
+
+@mcp.tool()
+def pro_show_progress_dialog(
+    title: str,
+    message: str,
+) -> dict[str, Any]:
+    """Show a progress/info dialog in ArcGIS Pro."""
+    return _call_addin(
+        "pro.showProgressDialog",
+        {"title": title, "message": message},
+    )
+
+
+@mcp.tool()
+def pro_set_status_bar_progress(
+    percent: int,
+    message: str,
+) -> dict[str, Any]:
+    """Set the status bar progress percentage and message (0-100)."""
+    return _call_addin(
+        "pro.setStatusBarProgress",
+        {"percent": str(percent), "message": message},
+    )
+
+
+@mcp.tool()
+def pro_list_dockpanes() -> dict[str, Any]:
+    """List known dockpanes available in ArcGIS Pro."""
+    return _call_addin("pro.listDockpanes")
+
+
+@mcp.tool()
+def pro_activate_ribbon_tab(
+    tab_id: str,
+) -> dict[str, Any]:
+    """Activate a ribbon tab by name (Map, Edit, Catalog, Insert, Analysis, View) or DAML ID."""
+    return _call_addin(
+        "pro.activateRibbonTab",
+        {"tabId": tab_id},
+    )
+
+
+# --- Phase 13: Schema Management ---
+
+
+@mcp.tool()
+def pro_list_domains(
+    gdb_path: str,
+) -> dict[str, Any]:
+    """List coded-value and range domains in a geodatabase."""
+    return _call_addin(
+        "pro.listDomains",
+        {"gdbPath": gdb_path},
+    )
+
+
+@mcp.tool()
+def pro_create_domain(
+    gdb_path: str,
+    name: str,
+    description: str,
+    field_type: str,
+    coded_values: str | None = None,
+) -> dict[str, Any]:
+    """Create a coded-value domain (coded_values as JSON dict) or range domain."""
+    args = {
+        "gdbPath": gdb_path, "name": name, "description": description,
+        "fieldType": field_type,
+    }
+    if coded_values:
+        args["codedValues"] = coded_values
+    return _call_addin("pro.createDomain", args)
+
+
+@mcp.tool()
+def pro_assign_domain_to_field(
+    layer: str,
+    field: str,
+    domain_name: str,
+) -> dict[str, Any]:
+    """Assign a domain to a field on a layer."""
+    return _call_addin(
+        "pro.assignDomainToField",
+        {"layer": layer, "field": field, "domainName": domain_name},
+    )
+
+
+@mcp.tool()
+def pro_list_subtypes(
+    layer: str,
+) -> dict[str, Any]:
+    """List subtypes for a feature layer."""
+    return _call_addin(
+        "pro.listSubtypes",
+        {"layer": layer},
+    )
+
+
+@mcp.tool()
+def pro_set_subtype_field(
+    layer: str,
+    field: str,
+) -> dict[str, Any]:
+    """Set the subtype field for a feature layer."""
+    return _call_addin(
+        "pro.setSubtypeField",
+        {"layer": layer, "field": field},
+    )
+
+
+@mcp.tool()
+def pro_enable_attachments(
+    layer: str,
+) -> dict[str, Any]:
+    """Enable attachments on a feature layer."""
+    return _call_addin(
+        "pro.enableAttachments",
+        {"layer": layer},
+    )
+
+
+# --- Phase 14: Advanced Geoprocessing ---
+
+
+@mcp.tool()
+def pro_list_toolboxes() -> dict[str, Any]:
+    """List all available geoprocessing toolboxes (project + system)."""
+    return _call_addin("pro.listToolboxes", {})
+
+
+@mcp.tool()
+def pro_describe_tool(
+    tool_name: str,
+) -> dict[str, Any]:
+    """Describe a geoprocessing tool and its parameters.
+
+    Runs arcpy.GetParameterInfo() in Pro's Python interpreter
+    to return parameter name, datatype, direction, required flag,
+    parameter type, category, and default value for each parameter.
+    """
+    return _call_addin(
+        "pro.describeTool",
+        {"toolName": tool_name},
+    )
+
+
+@mcp.tool()
+def pro_get_geoprocessing_history(
+    count: int = 20,
+) -> dict[str, Any]:
+    """Return recent geoprocessing execution history."""
+    return _call_addin(
+        "pro.getGeoprocessingHistory",
+        {"count": str(count)},
+    )
+
+
+@mcp.tool()
+def pro_run_python_script(
+    code: str,
+    timeout_seconds: int = 60,
+) -> dict[str, Any]:
+    """Execute a Python script in ArcGIS Pro's Python environment.
+
+    Returns stdout, stderr, and exit code.
+    """
+    return _call_addin(
+        "pro.runPythonScript",
+        {"code": code, "timeoutSeconds": str(timeout_seconds)},
+    )
+
+
+@mcp.tool()
+def pro_set_environment(
+    key: str,
+    value: str,
+) -> dict[str, Any]:
+    """Set a geoprocessing environment setting (e.g. workspace, cellSize, extent)."""
+    return _call_addin(
+        "pro.setEnvironment",
+        {"key": key, "value": value},
+    )
+
+
+@mcp.tool()
+def pro_get_environment(
+    key: str | None = None,
+) -> dict[str, Any]:
+    """Get geoprocessing environment settings. Omit key to list all known settings."""
+    args: dict[str, str] = {}
+    if key:
+        args["key"] = key
+    return _call_addin("pro.getEnvironment", args)
 
 
 def main() -> None:

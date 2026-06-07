@@ -15,6 +15,7 @@ classifiers = [
 ]
 dependencies = [
   "mcp[cli]>=1.9.4",
+  "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.scripts]
@@ -26,7 +27,7 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["arcgis_aprx_archive", "arcgis_mcp_resources", "arcgis_mcp_server", "arcgis_mcp_services", "arcgis_runtime_utils", "arcgis_script_templates"]
+py-modules = ["arcgis_aprx_archive", "arcgis_mcp_named_pipe", "arcgis_mcp_resources", "arcgis_mcp_server", "arcgis_mcp_services", "arcgis_runtime_utils", "arcgis_script_templates"]
 
 [tool.ruff]
 line-length = 100

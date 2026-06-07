@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+import arcgis_mcp_named_pipe as named_pipe
 import arcgis_mcp_server as server
 from arcgis_runtime_utils import build_arcgis_subprocess_env, remove_tree
 from arcgis_script_templates import (
@@ -896,11 +897,15 @@ class ReclassifyCriteriaToolTests(unittest.TestCase):
             side_effect=server.ArcGISDiscoveryError("ArcGIS Pro Python not found"),
         ):
             payload = server.reclassify_criteria(
-                reclass_table=json.dumps([{
-                    "input_raster": r"D:\GIS\dist_water",
-                    "output_name": "rcl_water",
-                    "remap": remap,
-                }]),
+                reclass_table=json.dumps(
+                    [
+                        {
+                            "input_raster": r"D:\GIS\dist_water",
+                            "output_name": "rcl_water",
+                            "remap": remap,
+                        }
+                    ]
+                ),
                 output_gdb=r"D:\GIS\output.gdb",
             )
         self.assertEqual(payload["status"], "unavailable")
@@ -1129,6 +1134,3175 @@ class ExportSuitabilityMapToolTests(unittest.TestCase):
                 output_path=r"D:\GIS\map.pdf",
             )
         self.assertEqual(payload["status"], "unavailable")
+
+
+class NamedPipeModuleTests(unittest.TestCase):
+    """Tests for the arcgis_mcp_named_pipe module."""
+
+    def test_is_addin_available_returns_false_when_pywin32_missing(self) -> None:
+        with patch("arcgis_mcp_named_pipe._PYWIN32_AVAILABLE", False):
+            self.assertFalse(named_pipe.is_addin_available())
+
+    def test_call_addin_raises_when_pywin32_missing(self) -> None:
+        with patch("arcgis_mcp_named_pipe._PYWIN32_AVAILABLE", False):
+            with self.assertRaises(named_pipe.AddInNotAvailableError):
+                named_pipe.call_addin("pro.ping")
+
+    def test_call_addin_raises_with_helpful_message_when_pywin32_missing(self) -> None:
+        with patch("arcgis_mcp_named_pipe._PYWIN32_AVAILABLE", False):
+            with self.assertRaises(named_pipe.AddInNotAvailableError) as ctx:
+                named_pipe.call_addin("pro.ping")
+            self.assertIn("pywin32 is not installed", str(ctx.exception))
+
+    def test_call_addin_handles_pipe_not_found_gracefully(self) -> None:
+        if not named_pipe._PYWIN32_AVAILABLE:
+            self.skipTest("pywin32 not available on this Python")
+        with self.assertRaises(named_pipe.AddInNotAvailableError):
+            named_pipe.call_addin("pro.ping", timeout=0.1)
+
+    def test_open_pipe_raises_when_pywin32_missing(self) -> None:
+        with patch("arcgis_mcp_named_pipe._PYWIN32_AVAILABLE", False):
+            with self.assertRaises(named_pipe.AddInNotAvailableError):
+                named_pipe._open_pipe(timeout=0.1)
+
+
+class ProToolsTests(unittest.TestCase):
+    """Tests for the pro.* MCP tools in arcgis_mcp_server."""
+
+    def test_pro_ping_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_ping()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_ping_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"pong": "addin"}):
+            result = server.pro_ping()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_ping_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_ping()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_active_map_name_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_active_map_name()
+        mock_call.assert_called_once_with("pro.getActiveMapName", None)
+
+    def test_pro_list_layers_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_layers()
+        mock_call.assert_called_once_with("pro.listLayers", None)
+
+    def test_pro_count_features_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_count_features(layer="Parcels")
+        mock_call.assert_called_once_with("pro.countFeatures", {"layer": "Parcels"})
+
+    def test_pro_get_layer_schema_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_layer_schema(layer="Roads")
+        mock_call.assert_called_once_with("pro.getLayerSchema", {"layer": "Roads"})
+
+    def test_pro_get_selection_count_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_selection_count(layer="Buildings")
+        mock_call.assert_called_once_with("pro.getSelectionCount", {"layer": "Buildings"})
+
+    def test_pro_select_by_attribute_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_select_by_attribute(layer="Parcels", where="ZONE = 'Residential'")
+        mock_call.assert_called_once_with(
+            "pro.selectByAttribute",
+            {"layer": "Parcels", "where": "ZONE = 'Residential'"},
+        )
+
+    def test_pro_clear_selection_with_layer_forwards_layer_arg(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_clear_selection(layer="Parcels")
+        mock_call.assert_called_once_with("pro.clearSelection", {"layer": "Parcels"})
+
+    def test_pro_clear_selection_without_layer_forwards_empty_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_clear_selection()
+        mock_call.assert_called_once_with("pro.clearSelection", {})
+
+    def test_pro_zoom_to_layer_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_zoom_to_layer(layer="Parcels")
+        mock_call.assert_called_once_with("pro.zoomToLayer", {"layer": "Parcels"})
+
+    def test_pro_get_current_extent_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_current_extent()
+        mock_call.assert_called_once_with("pro.getCurrentExtent", None)
+
+    def test_pro_pan_to_extent_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_pan_to_extent(xmin=500000, ymin=6900000, xmax=510000, ymax=6910000)
+        mock_call.assert_called_once_with(
+            "pro.panToExtent",
+            {"xmin": "500000", "ymin": "6900000", "xmax": "510000", "ymax": "6910000"},
+        )
+
+    def test_pro_tools_return_unavailable_with_next_step_on_connection_error(self) -> None:
+        err = named_pipe.AddInNotAvailableError("timeout")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_ping()
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIn("next_step", result)
+        self.assertIn("APBridgeAddIn", result["next_step"])
+
+    # --- Phase 0: pro_get_camera ---
+
+    def test_pro_get_camera_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_camera()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_camera_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"x": 1.0, "y": 2.0}):
+            result = server.pro_get_camera()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_camera_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_camera()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_camera_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_camera()
+        mock_call.assert_called_once_with("pro.getCamera", None)
+
+    # --- Phase 0: pro_set_layer_visibility ---
+
+    def test_pro_set_layer_visibility_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_visibility(layer="Roads", visible=False)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_layer_visibility_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_layer_visibility(layer="Roads", visible=True)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_layer_visibility_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_visibility(layer="Roads", visible=False)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_layer_visibility_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_layer_visibility(layer="Roads", visible=False)
+        mock_call.assert_called_once_with(
+            "pro.setLayerVisibility",
+            {"layer": "Roads", "visible": "false"},
+        )
+
+    # --- Phase 0: pro_get_layer_extent ---
+
+    def test_pro_get_layer_extent_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_extent(layer="Parcels")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_layer_extent_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"xmin": 0.0, "ymin": 0.0}):
+            result = server.pro_get_layer_extent(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_layer_extent_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_extent(layer="Parcels")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_layer_extent_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_layer_extent(layer="Buildings")
+        mock_call.assert_called_once_with("pro.getLayerExtent", {"layer": "Buildings"})
+
+    # --- Phase 0: pro_select_by_rectangle ---
+
+    def test_pro_select_by_rectangle_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_by_rectangle(layer="Parcels", xmin=0, ymin=0, xmax=1, ymax=1)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_select_by_rectangle_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_select_by_rectangle(layer="Parcels", xmin=0, ymin=0, xmax=1, ymax=1)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_select_by_rectangle_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_by_rectangle(layer="Parcels", xmin=0, ymin=0, xmax=1, ymax=1)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_select_by_rectangle_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_select_by_rectangle(
+                layer="Parcels", xmin=100.5, ymin=200.5, xmax=300.5, ymax=400.5
+            )
+        mock_call.assert_called_once_with(
+            "pro.selectByRectangle",
+            {
+                "layer": "Parcels",
+                "xmin": "100.5",
+                "ymin": "200.5",
+                "xmax": "300.5",
+                "ymax": "400.5",
+                "selectionType": "NEW",
+            },
+        )
+
+    def test_pro_select_by_rectangle_forwards_custom_selection_type(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_select_by_rectangle(
+                layer="Parcels", xmin=0, ymin=0, xmax=1, ymax=1, selection_type="ADD"
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["selectionType"], "ADD")
+
+    # --- Phase 0: pro_switch_selection ---
+
+    def test_pro_switch_selection_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_switch_selection()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_switch_selection_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_switch_selection(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_switch_selection_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_switch_selection()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_switch_selection_with_layer_forwards_layer_arg(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_switch_selection(layer="Parcels")
+        mock_call.assert_called_once_with("pro.switchSelection", {"layer": "Parcels"})
+
+    def test_pro_switch_selection_without_layer_forwards_empty_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_switch_selection()
+        mock_call.assert_called_once_with("pro.switchSelection", {})
+
+    # --- Phase 0: pro_get_feature_by_oid ---
+
+    def test_pro_get_feature_by_oid_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_feature_by_oid(layer="Parcels", oid=42)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_feature_by_oid_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"attributes": {"Name": "Test"}}):
+            result = server.pro_get_feature_by_oid(layer="Parcels", oid=1)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_feature_by_oid_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_feature_by_oid(layer="Parcels", oid=1)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_feature_by_oid_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_feature_by_oid(layer="Buildings", oid=99)
+        mock_call.assert_called_once_with(
+            "pro.getFeatureByOid",
+            {"layer": "Buildings", "oid": "99"},
+        )
+
+    # --- Phase 0: pro_undo_edit ---
+
+    def test_pro_undo_edit_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_undo_edit()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_undo_edit_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"undoPerformed": True}):
+            result = server.pro_undo_edit()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_undo_edit_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_undo_edit()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_undo_edit_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_undo_edit()
+        mock_call.assert_called_once_with("pro.undoEdit", None)
+
+    # --- Phase 0: pro_redo_edit ---
+
+    def test_pro_redo_edit_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_redo_edit()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_redo_edit_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"redoPerformed": True}):
+            result = server.pro_redo_edit()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_redo_edit_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_redo_edit()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_redo_edit_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_redo_edit()
+        mock_call.assert_called_once_with("pro.redoEdit", None)
+
+    # --- Phase 0: pro_set_active_tool ---
+
+    def test_pro_set_active_tool_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_active_tool(tool="esri_mapping_selectTool")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_active_tool_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_active_tool(tool="esri_mapping_exploreTool")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_active_tool_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_active_tool(tool="esri_mapping_identifyTool")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_active_tool_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_active_tool(tool="esri_mapping_selectTool")
+        mock_call.assert_called_once_with(
+            "pro.setActiveTool",
+            {"tool": "esri_mapping_selectTool"},
+        )
+
+    # --- Phase 0: pro_is_3d ---
+
+    def test_pro_is_3d_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_is_3d()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_is_3d_returns_ok_when_pipe_reachable(self) -> None:
+        with patch(
+            "arcgis_mcp_server.call_addin",
+            return_value={"is3d": False, "viewingMode": "Map"},
+        ):
+            result = server.pro_is_3d()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_is_3d_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_is_3d()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_is_3d_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_is_3d()
+        mock_call.assert_called_once_with("pro.is3d", None)
+
+    # --- Phase 1: pro_get_layer_renderer ---
+
+    def test_pro_get_layer_renderer_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_renderer(layer="Roads")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_layer_renderer_returns_ok_when_pipe_reachable(self) -> None:
+        with patch(
+            "arcgis_mcp_server.call_addin",
+            return_value={"rendererType": "Simple", "field": None},
+        ):
+            result = server.pro_get_layer_renderer(layer="Roads")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_layer_renderer_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_renderer(layer="Roads")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_layer_renderer_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_layer_renderer(layer="Parcels")
+        mock_call.assert_called_once_with("pro.getLayerRenderer", {"layer": "Parcels"})
+
+    # --- Phase 1: pro_set_layer_color ---
+
+    def test_pro_set_layer_color_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_color(layer="Parcels", r=255, g=0, b=0)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_layer_color_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_layer_color(layer="Parcels", r=255, g=0, b=0)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_layer_color_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_color(layer="Parcels", r=0, g=255, b=0)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_layer_color_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_layer_color(layer="Roads", r=100, g=150, b=200)
+        mock_call.assert_called_once_with(
+            "pro.setLayerColor",
+            {"layer": "Roads", "r": "100", "g": "150", "b": "200"},
+        )
+
+    # --- Phase 1: pro_remove_layer ---
+
+    def test_pro_remove_layer_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_remove_layer(layer="Parcels")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_remove_layer_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_remove_layer(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_remove_layer_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_remove_layer(layer="Parcels")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_remove_layer_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_remove_layer(layer="FloodZones")
+        mock_call.assert_called_once_with("pro.removeLayer", {"layer": "FloodZones"})
+
+    # --- Phase 1: pro_add_layer_from_file ---
+
+    def test_pro_add_layer_from_file_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layer_from_file(path=r"C:\data\roads.lyrx")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_layer_from_file_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_add_layer_from_file(path=r"D:\gis\parcels.lyrx")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_layer_from_file_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layer_from_file(path=r"C:\nonexistent.lyrx")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_layer_from_file_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layer_from_file(path=r"D:\data\buildings.lyrx")
+        mock_call.assert_called_once_with(
+            "pro.addLayerFromFile",
+            {"path": r"D:\data\buildings.lyrx"},
+        )
+
+    # --- Phase 1: pro_select_by_polygon ---
+
+    def test_pro_select_by_polygon_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_by_polygon(
+                layer="Parcels", coordinates="0,0 10,0 10,10 0,10 0,0"
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_select_by_polygon_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_select_by_polygon(
+                layer="Parcels", coordinates="100,200 300,400 500,600"
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_select_by_polygon_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_by_polygon(
+                layer="Parcels", coordinates="0,0 1,0 1,1 0,1 0,0"
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_select_by_polygon_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_select_by_polygon(
+                layer="Zones",
+                coordinates="0,0 10,0 10,10 0,10 0,0",
+            )
+        mock_call.assert_called_once_with(
+            "pro.selectByPolygon",
+            {
+                "layer": "Zones",
+                "coordinates": "0,0 10,0 10,10 0,10 0,0",
+                "selectionType": "NEW",
+            },
+        )
+
+    def test_pro_select_by_polygon_forwards_custom_selection_type(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_select_by_polygon(
+                layer="Zones",
+                coordinates="0,0 5,0 5,5 0,5 0,0",
+                selection_type="SUBTRACT",
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["selectionType"], "SUBTRACT")
+
+    # --- Phase 1: pro_list_layouts ---
+
+    def test_pro_list_layouts_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_layouts()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_layouts_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value=[{"name": "Layout1"}]):
+            result = server.pro_list_layouts()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_layouts_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_layouts()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_layouts_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_layouts()
+        mock_call.assert_called_once_with("pro.listLayouts", None)
+
+    # --- Phase 1: pro_get_project_properties ---
+
+    def test_pro_get_project_properties_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_project_properties()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_project_properties_returns_ok_when_pipe_reachable(self) -> None:
+        with patch(
+            "arcgis_mcp_server.call_addin",
+            return_value={"name": "MyProject", "defaultGdb": "..."},
+        ):
+            result = server.pro_get_project_properties()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_project_properties_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_project_properties()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_project_properties_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_project_properties()
+        mock_call.assert_called_once_with("pro.getProjectProperties", None)
+
+    # --- Phase 1: pro_get_geometry_distance ---
+
+    def test_pro_get_geometry_distance_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_geometry_distance(x1=0, y1=0, x2=10, y2=10)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_geometry_distance_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"distance": 14.14}):
+            result = server.pro_get_geometry_distance(x1=0, y1=0, x2=10, y2=10)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_geometry_distance_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_geometry_distance(x1=0, y1=0, x2=10, y2=10)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_geometry_distance_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_geometry_distance(x1=100.5, y1=200.5, x2=300.5, y2=400.5)
+        mock_call.assert_called_once_with(
+            "pro.getGeometryDistance",
+            {"x1": "100.5", "y1": "200.5", "x2": "300.5", "y2": "400.5"},
+        )
+
+    # --- Phase 2: pro_set_layer_transparency ---
+
+    def test_pro_set_layer_transparency_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_transparency(layer="Roads", transparency=50)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_layer_transparency_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_layer_transparency(layer="Roads", transparency=25)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_layer_transparency_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_transparency(layer="Roads", transparency=75)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_layer_transparency_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_layer_transparency(layer="Parcels", transparency=33.5)
+        mock_call.assert_called_once_with(
+            "pro.setLayerTransparency",
+            {"layer": "Parcels", "transparency": "33.5"},
+        )
+
+    # --- Phase 2: pro_get_all_map_names ---
+
+    def test_pro_get_all_map_names_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_all_map_names()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_all_map_names_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value=[{"name": "Map1"}]):
+            result = server.pro_get_all_map_names()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_all_map_names_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_all_map_names()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_all_map_names_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_all_map_names()
+        mock_call.assert_called_once_with("pro.getAllMapNames", None)
+
+    # --- Phase 2: pro_get_map_frame ---
+
+    def test_pro_get_map_frame_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_map_frame(layout_name="Layout1")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_map_frame_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value=[{"name": "Map Frame"}]):
+            result = server.pro_get_map_frame(layout_name="Layout1")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_map_frame_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_map_frame(layout_name="Layout1")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_map_frame_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_map_frame(layout_name="MyLayout")
+        mock_call.assert_called_once_with("pro.getMapFrame", {"layoutName": "MyLayout"})
+
+    def test_pro_get_map_frame_forwards_optional_map_frame_name(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_map_frame(layout_name="Layout1", map_frame_name="Main Map")
+        mock_call.assert_called_once_with(
+            "pro.getMapFrame",
+            {"layoutName": "Layout1", "mapFrameName": "Main Map"},
+        )
+
+    # --- Phase 2: pro_select_by_layer ---
+
+    def test_pro_select_by_layer_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_by_layer(
+                target_layer="Buildings", source_layer="Parcels"
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_select_by_layer_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_select_by_layer(
+                target_layer="Buildings", source_layer="Parcels"
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_select_by_layer_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_by_layer(
+                target_layer="Buildings", source_layer="Parcels"
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_select_by_layer_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_select_by_layer(
+                target_layer="Buildings",
+                source_layer="Parcels",
+                spatial_relationship="Contains",
+                selection_type="ADD",
+            )
+        mock_call.assert_called_once_with(
+            "pro.selectByLayer",
+            {
+                "targetLayer": "Buildings",
+                "sourceLayer": "Parcels",
+                "spatialRelationship": "Contains",
+                "selectionType": "ADD",
+            },
+        )
+
+    # --- Phase 2: pro_get_features_by_extent ---
+
+    def test_pro_get_features_by_extent_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_features_by_extent(
+                layer="Parcels", xmin=0, ymin=0, xmax=10, ymax=10
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_features_by_extent_returns_ok_when_pipe_reachable(self) -> None:
+        with patch(
+            "arcgis_mcp_server.call_addin",
+            return_value={"features": [], "count": 0},
+        ):
+            result = server.pro_get_features_by_extent(
+                layer="Parcels", xmin=0, ymin=0, xmax=10, ymax=10
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_features_by_extent_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_features_by_extent(
+                layer="Parcels", xmin=0, ymin=0, xmax=10, ymax=10
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_features_by_extent_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_features_by_extent(
+                layer="Parcels", xmin=100, ymin=200, xmax=300, ymax=400
+            )
+        mock_call.assert_called_once_with(
+            "pro.getFeaturesByExtent",
+            {
+                "layer": "Parcels",
+                "xmin": "100",
+                "ymin": "200",
+                "xmax": "300",
+                "ymax": "400",
+                "maxFeatures": "100",
+            },
+        )
+
+    def test_pro_get_features_by_extent_forwards_fields(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_features_by_extent(
+                layer="Roads",
+                xmin=0, ymin=0, xmax=1, ymax=1,
+                fields="NAME,TYPE",
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["fields"], "NAME,TYPE")
+
+    # --- Phase 2: pro_delete_features_by_oid ---
+
+    def test_pro_delete_features_by_oid_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_features_by_oid(layer="Parcels", oids="1,2,3")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_delete_features_by_oid_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_delete_features_by_oid(layer="Parcels", oids="5")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_delete_features_by_oid_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_features_by_oid(layer="Parcels", oids="1")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_delete_features_by_oid_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_delete_features_by_oid(layer="Zones", oids="10,11,12")
+        mock_call.assert_called_once_with(
+            "pro.deleteFeaturesByOid",
+            {"layer": "Zones", "oids": "10,11,12"},
+        )
+
+    # --- Phase 2: pro_update_feature_attributes ---
+
+    def test_pro_update_feature_attributes_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_update_feature_attributes(
+                layer="Parcels", oid=1, attributes='{"Name":"New"}'
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_update_feature_attributes_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_update_feature_attributes(
+                layer="Parcels", oid=1, attributes='{"Name":"New"}'
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_update_feature_attributes_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_update_feature_attributes(
+                layer="Parcels", oid=1, attributes='{"Name":"New"}'
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_update_feature_attributes_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_update_feature_attributes(
+                layer="Buildings",
+                oid=42,
+                attributes='{"Height":100,"Name":"Tower"}',
+            )
+        mock_call.assert_called_once_with(
+            "pro.updateFeatureAttributes",
+            {
+                "layer": "Buildings",
+                "oid": "42",
+                "attributes": '{"Height":100,"Name":"Tower"}',
+            },
+        )
+
+    # --- Phase 2: pro_create_point_feature ---
+
+    def test_pro_create_point_feature_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_point_feature(layer="Trees", x=100, y=200)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_create_point_feature_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "objectId": 1}):
+            result = server.pro_create_point_feature(layer="Trees", x=100, y=200)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_point_feature_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_point_feature(layer="Trees", x=100, y=200)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_create_point_feature_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_point_feature(layer="Trees", x=100.5, y=200.5)
+        mock_call.assert_called_once_with(
+            "pro.createPointFeature",
+            {"layer": "Trees", "x": "100.5", "y": "200.5"},
+        )
+
+    def test_pro_create_point_feature_forwards_optional_wkid_and_attributes(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_point_feature(
+                layer="Trees",
+                x=100, y=200,
+                wkid=28356,
+                attributes='{"Species":"Oak"}',
+            )
+        mock_call.assert_called_once_with(
+            "pro.createPointFeature",
+            {
+                "layer": "Trees",
+                "x": "100",
+                "y": "200",
+                "wkid": "28356",
+                "attributes": '{"Species":"Oak"}',
+            },
+        )
+
+    # --- Phase 4: pro_apply_unique_value_renderer ---
+
+    def test_pro_apply_unique_value_renderer_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_apply_unique_value_renderer(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_apply_unique_value_renderer_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "classCount": 3}):
+            result = server.pro_apply_unique_value_renderer(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_apply_unique_value_renderer_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_apply_unique_value_renderer(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_apply_unique_value_renderer_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_apply_unique_value_renderer(layer="Parcels", field="ZONE")
+        mock_call.assert_called_once_with(
+            "pro.applyUniqueValueRenderer",
+            {"layer": "Parcels", "field": "ZONE"},
+        )
+
+    def test_pro_apply_unique_value_renderer_forwards_color_ramp(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_apply_unique_value_renderer(
+                layer="Parcels", field="ZONE", color_ramp="[[255,0,0],[0,255,0]]"
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["colorRamp"], "[[255,0,0],[0,255,0]]")
+
+    # --- Phase 4: pro_apply_class_breaks_renderer ---
+
+    def test_pro_apply_class_breaks_renderer_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_apply_class_breaks_renderer(layer="Parcels", field="AREA")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_apply_class_breaks_renderer_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "breakCount": 5}):
+            result = server.pro_apply_class_breaks_renderer(layer="Parcels", field="AREA")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_apply_class_breaks_renderer_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_apply_class_breaks_renderer(layer="Parcels", field="AREA")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_apply_class_breaks_renderer_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_apply_class_breaks_renderer(layer="Parcels", field="AREA", break_count=3)
+        mock_call.assert_called_once_with(
+            "pro.applyClassBreaksRenderer",
+            {"layer": "Parcels", "field": "AREA", "breakCount": "3"},
+        )
+
+    # --- Phase 4: pro_get_elevation_sources ---
+
+    def test_pro_get_elevation_sources_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_elevation_sources()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_elevation_sources_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"isScene": True, "elevationSources": []}):
+            result = server.pro_get_elevation_sources()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_elevation_sources_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_elevation_sources()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_elevation_sources_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_elevation_sources()
+        mock_call.assert_called_once_with("pro.getElevationSources", None)
+
+    # --- Phase 4: pro_set_ground_opacity ---
+
+    def test_pro_set_ground_opacity_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_ground_opacity(opacity=50)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_ground_opacity_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_ground_opacity(opacity=75)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_ground_opacity_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_ground_opacity(opacity=25)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_ground_opacity_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_ground_opacity(opacity=60)
+        mock_call.assert_called_once_with(
+            "pro.setGroundOpacity",
+            {"opacity": "60"},
+        )
+
+    # --- Phase 4: pro_get_active_tool ---
+
+    def test_pro_get_active_tool_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_active_tool()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_active_tool_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"activeTool": "esri_mapping_selectTool"}):
+            result = server.pro_get_active_tool()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_active_tool_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_active_tool()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_active_tool_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_active_tool()
+        mock_call.assert_called_once_with("pro.getActiveTool", None)
+
+    # --- Phase 4: pro_list_field_values ---
+
+    def test_pro_list_field_values_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_field_values(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_field_values_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"field": "ZONE", "distinctCount": 3}):
+            result = server.pro_list_field_values(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_field_values_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_field_values(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_field_values_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_field_values(layer="Parcels", field="ZONE", max_values=50)
+        mock_call.assert_called_once_with(
+            "pro.listFieldValues",
+            {"layer": "Parcels", "field": "ZONE", "maxValues": "50"},
+        )
+
+    # --- Phase 4: pro_add_field ---
+
+    def test_pro_add_field_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_field(layer="Parcels", field_name="NEW_FIELD", field_type="Text")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_field_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_add_field(layer="Parcels", field_name="AREA_HA", field_type="Double")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_field_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_field(layer="Parcels", field_name="F", field_type="Integer")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_field_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_field(layer="Parcels", field_name="DESCRIPTION", field_type="Text", length=255)
+        mock_call.assert_called_once_with(
+            "pro.addField",
+            {"layer": "Parcels", "fieldName": "DESCRIPTION", "fieldType": "Text", "length": "255"},
+        )
+
+    def test_pro_add_field_forwards_optional_precision_scale(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_field(layer="Parcels", field_name="RATIO", field_type="Double", precision=10, scale=4)
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["precision"], "10")
+        self.assertEqual(call_args["scale"], "4")
+
+    # --- Phase 4: pro_delete_field ---
+
+    def test_pro_delete_field_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_field(layer="Parcels", field_name="OLD_FIELD")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_delete_field_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_delete_field(layer="Parcels", field_name="TEMP")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_delete_field_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_field(layer="Parcels", field_name="TEMP")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_delete_field_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_delete_field(layer="Parcels", field_name="DEPRECATED")
+        mock_call.assert_called_once_with(
+            "pro.deleteField",
+            {"layer": "Parcels", "fieldName": "DEPRECATED"},
+        )
+
+    # --- Phase 4: pro_create_polygon_feature ---
+
+    def test_pro_create_polygon_feature_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_polygon_feature(
+                layer="Parcels", coordinates="0,0 10,0 10,10 0,10 0,0"
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_create_polygon_feature_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "objectId": 1}):
+            result = server.pro_create_polygon_feature(
+                layer="Zones", coordinates="100,100 200,100 200,200 100,200 100,100"
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_polygon_feature_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_polygon_feature(
+                layer="Zones", coordinates="0,0 1,0 1,1 0,1 0,0"
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_create_polygon_feature_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_polygon_feature(
+                layer="Zones", coordinates="0,0 10,0 10,10 0,10 0,0"
+            )
+        mock_call.assert_called_once_with(
+            "pro.createPolygonFeature",
+            {"layer": "Zones", "coordinates": "0,0 10,0 10,10 0,10 0,0"},
+        )
+
+    def test_pro_create_polygon_feature_forwards_optional_wkid_and_attributes(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_polygon_feature(
+                layer="Zones", coordinates="0,0 1,1 2,0 0,0",
+                wkid=28356, attributes='{"Name":"Test"}',
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["wkid"], "28356")
+        self.assertEqual(call_args["attributes"], '{"Name":"Test"}')
+
+    # --- Phase 4: pro_create_line_feature ---
+
+    def test_pro_create_line_feature_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_line_feature(layer="Roads", coordinates="0,0 10,10")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_create_line_feature_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "objectId": 1}):
+            result = server.pro_create_line_feature(layer="Roads", coordinates="0,0 100,100 200,0")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_line_feature_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_line_feature(layer="Roads", coordinates="0,0 1,1")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_create_line_feature_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_line_feature(layer="Roads", coordinates="0,0 50,50 100,0")
+        mock_call.assert_called_once_with(
+            "pro.createLineFeature",
+            {"layer": "Roads", "coordinates": "0,0 50,50 100,0"},
+        )
+
+    def test_pro_create_line_feature_forwards_optional_wkid_and_attributes(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_line_feature(
+                layer="Roads", coordinates="0,0 1,1",
+                wkid=28356, attributes='{"Type":"Highway"}',
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["wkid"], "28356")
+        self.assertEqual(call_args["attributes"], '{"Type":"Highway"}')
+
+    # --- Phase 5: pro_set_map_scale ---
+
+    def test_pro_set_map_scale_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_map_scale(scale=50000)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_map_scale_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "scale": 25000}):
+            result = server.pro_set_map_scale(scale=25000)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_map_scale_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_map_scale(scale=1000)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_map_scale_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_map_scale(scale=50000)
+        mock_call.assert_called_once_with(
+            "pro.setMapScale",
+            {"scale": "50000"},
+        )
+
+    # --- Phase 5: pro_get_map_scale ---
+
+    def test_pro_get_map_scale_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_map_scale()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_map_scale_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"scale": 10000}):
+            result = server.pro_get_map_scale()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_map_scale_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_map_scale()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_map_scale_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_map_scale()
+        mock_call.assert_called_once_with("pro.getMapScale", None)
+
+    # --- Phase 5: pro_zoom_to_selected ---
+
+    def test_pro_zoom_to_selected_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_zoom_to_selected()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_zoom_to_selected_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_zoom_to_selected()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_zoom_to_selected_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_zoom_to_selected()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_zoom_to_selected_forwards_op_without_layer(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_zoom_to_selected()
+        mock_call.assert_called_once_with("pro.zoomToSelected", {})
+
+    def test_pro_zoom_to_selected_forwards_op_with_layer(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_zoom_to_selected(layer="Parcels")
+        mock_call.assert_called_once_with(
+            "pro.zoomToSelected",
+            {"layer": "Parcels"},
+        )
+
+    # --- Phase 5: pro_get_edit_state ---
+
+    def test_pro_get_edit_state_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_edit_state()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_edit_state_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"undoCount": 3, "redoCount": 0}):
+            result = server.pro_get_edit_state()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_edit_state_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_edit_state()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_edit_state_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_edit_state()
+        mock_call.assert_called_once_with("pro.getEditState", None)
+
+    # --- Phase 5: pro_set_snapping ---
+
+    def test_pro_set_snapping_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_snapping(enabled=True)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_snapping_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "snappingEnabled": True}):
+            result = server.pro_set_snapping(enabled=True)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_snapping_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_snapping(enabled=False)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_snapping_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_snapping(enabled=True)
+        mock_call.assert_called_once_with(
+            "pro.setSnapping",
+            {"enabled": "true"},
+        )
+
+    # --- Phase 5: pro_delete_bookmark ---
+
+    def test_pro_delete_bookmark_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_bookmark(name="zoom1")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_delete_bookmark_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "name": "zoom1"}):
+            result = server.pro_delete_bookmark(name="zoom1")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_delete_bookmark_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_bookmark(name="zoom1")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_delete_bookmark_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_delete_bookmark(name="My Bookmark")
+        mock_call.assert_called_once_with(
+            "pro.deleteBookmark",
+            {"name": "My Bookmark"},
+        )
+
+    # --- Phase 5: pro_flash_selection ---
+
+    def test_pro_flash_selection_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_flash_selection(layer="Parcels")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_flash_selection_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "flashedCount": 5}):
+            result = server.pro_flash_selection(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_flash_selection_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_flash_selection(layer="Parcels")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_flash_selection_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_flash_selection(layer="Buildings")
+        mock_call.assert_called_once_with(
+            "pro.flashSelection",
+            {"layer": "Buildings"},
+        )
+
+    # --- Phase 5: pro_select_all ---
+
+    def test_pro_select_all_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_all(layer="Parcels")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_select_all_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "count": 100}):
+            result = server.pro_select_all(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_select_all_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_select_all(layer="Parcels")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_select_all_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_select_all(layer="Roads")
+        mock_call.assert_called_once_with(
+            "pro.selectAll",
+            {"layer": "Roads"},
+        )
+
+    # --- Phase 5: pro_set_status_bar_message ---
+
+    def test_pro_set_status_bar_message_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_status_bar_message(message="Processing...")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_status_bar_message_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "message": "Done"}):
+            result = server.pro_set_status_bar_message(message="Done")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_status_bar_message_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_status_bar_message(message="Error")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_status_bar_message_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_status_bar_message(message="Loading layer...")
+        mock_call.assert_called_once_with(
+            "pro.setStatusBarMessage",
+            {"message": "Loading layer..."},
+        )
+
+    # --- Phase 5: pro_list_standalone_tables ---
+
+    def test_pro_list_standalone_tables_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_standalone_tables()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_standalone_tables_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value=[{"name": "Table1"}]):
+            result = server.pro_list_standalone_tables()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_standalone_tables_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_standalone_tables()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_standalone_tables_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_standalone_tables()
+        mock_call.assert_called_once_with("pro.listStandaloneTables", None)
+
+    # --- Phase 6: pro_list_gp_history ---
+
+    def test_pro_list_gp_history_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_gp_history()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_gp_history_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value=[{"toolName": "Buffer"}]):
+            result = server.pro_list_gp_history()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_gp_history_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_gp_history()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_gp_history_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_gp_history(max_items=10)
+        mock_call.assert_called_once_with(
+            "pro.listGpHistory",
+            {"maxItems": "10"},
+        )
+
+    # --- Phase 6: pro_is_time_enabled ---
+
+    def test_pro_is_time_enabled_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_is_time_enabled()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_is_time_enabled_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"isTimeEnabled": True}):
+            result = server.pro_is_time_enabled()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_is_time_enabled_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_is_time_enabled()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_is_time_enabled_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_is_time_enabled()
+        mock_call.assert_called_once_with("pro.isTimeEnabled", None)
+
+    # --- Phase 6: pro_get_time_extent ---
+
+    def test_pro_get_time_extent_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_time_extent()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_time_extent_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"hasTimeExtent": True, "start": "2020", "end": "2025"}):
+            result = server.pro_get_time_extent()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_time_extent_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_time_extent()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_time_extent_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_time_extent()
+        mock_call.assert_called_once_with("pro.getTimeExtent", None)
+
+    # --- Phase 6: pro_set_time_extent ---
+
+    def test_pro_set_time_extent_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_time_extent(start="2020-01-01", end="2025-12-31")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_time_extent_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_time_extent(start="2021-06-01", end="2022-06-01")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_time_extent_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_time_extent(start="2020-01-01", end="2020-12-31")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_time_extent_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_time_extent(start="2020-01-01T00:00:00", end="2025-12-31T23:59:59")
+        mock_call.assert_called_once_with(
+            "pro.setTimeExtent",
+            {"start": "2020-01-01T00:00:00", "end": "2025-12-31T23:59:59"},
+        )
+
+    # --- Phase 6: pro_list_layout_elements ---
+
+    def test_pro_list_layout_elements_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_layout_elements(layout_name="Layout1")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_layout_elements_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"layoutName": "Layout1", "elementCount": 3}):
+            result = server.pro_list_layout_elements(layout_name="Layout1")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_layout_elements_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_layout_elements(layout_name="Layout1")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_layout_elements_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_layout_elements(layout_name="MyLayout")
+        mock_call.assert_called_once_with(
+            "pro.listLayoutElements",
+            {"layoutName": "MyLayout"},
+        )
+
+    # --- Phase 6: pro_rename_field ---
+
+    def test_pro_rename_field_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_rename_field(layer="Parcels", old_name="OLD", new_name="NEW")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_rename_field_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_rename_field(layer="Parcels", old_name="OLD", new_name="NEW")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_rename_field_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_rename_field(layer="Parcels", old_name="OLD", new_name="NEW")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_rename_field_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_rename_field(layer="Roads", old_name="OLD_NAME", new_name="NEW_NAME")
+        mock_call.assert_called_once_with(
+            "pro.renameField",
+            {"layer": "Roads", "oldName": "OLD_NAME", "newName": "NEW_NAME"},
+        )
+
+    # --- Phase 6: pro_get_layer_description ---
+
+    def test_pro_get_layer_description_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_description(layer="Parcels")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_layer_description_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"description": "Parcel boundaries"}):
+            result = server.pro_get_layer_description(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_layer_description_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_description(layer="Parcels")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_layer_description_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_layer_description(layer="Buildings")
+        mock_call.assert_called_once_with("pro.getLayerDescription", {"layer": "Buildings"})
+
+    # --- Phase 6: pro_set_layer_description ---
+
+    def test_pro_set_layer_description_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_description(layer="Parcels", description="Test")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_layer_description_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_layer_description(layer="Parcels", description="Updated desc")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_layer_description_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_description(layer="Parcels", description="Error")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_layer_description_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_layer_description(layer="Roads", description="Major roads layer")
+        mock_call.assert_called_once_with(
+            "pro.setLayerDescription",
+            {"layer": "Roads", "description": "Major roads layer"},
+        )
+
+    # --- Phase 6: pro_list_scene_layer_types ---
+
+    def test_pro_list_scene_layer_types_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_scene_layer_types()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_scene_layer_types_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"isScene": True, "layers": []}):
+            result = server.pro_list_scene_layer_types()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_scene_layer_types_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_scene_layer_types()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_scene_layer_types_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_scene_layer_types()
+        mock_call.assert_called_once_with("pro.listSceneLayerTypes", None)
+
+    # --- Phase 6: pro_count_features_by_expression ---
+
+    def test_pro_count_features_by_expression_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_count_features_by_expression(layer="Parcels", where="ZONE = 'A'")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_count_features_by_expression_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"count": 42}):
+            result = server.pro_count_features_by_expression(layer="Parcels", where="AREA > 1000")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_count_features_by_expression_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_count_features_by_expression(layer="Parcels", where="1=1")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_count_features_by_expression_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_count_features_by_expression(layer="Roads", where="TYPE = 'Highway'")
+        mock_call.assert_called_once_with(
+            "pro.countFeaturesByExpression",
+            {"layer": "Roads", "where": "TYPE = 'Highway'"},
+        )
+
+    # --- Phase 7: Advanced Editing & GP ---
+
+    def test_pro_split_features_unavailable(self) -> None:
+        geom = '{"type":"polyline","paths":[[[0,0],[1,1]]]}'
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_split_features(layer="Parcels", cut_geometry=geom)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_split_features_ok(self) -> None:
+        geom = '{"type":"polyline","paths":[[[0,0],[1,1]]]}'
+        with patch("arcgis_mcp_server.call_addin", return_value={"splitCount": 2}):
+            result = server.pro_split_features(layer="Parcels", cut_geometry=geom)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_split_features_error(self) -> None:
+        geom = '{"type":"polyline","paths":[[[0,0],[1,1]]]}'
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_split_features(layer="Parcels", cut_geometry=geom)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_split_features_forwards_op_and_args(self) -> None:
+        geom = '{"type":"polyline","paths":[[[0,0],[1,1]]]}'
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_split_features(layer="Roads", cut_geometry=geom)
+        mock_call.assert_called_once_with(
+            "pro.splitFeatures",
+            {"layer": "Roads", "cutGeometry": geom},
+        )
+
+    def test_pro_merge_features_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_merge_features(layer="Parcels", object_ids="[1,2,3]", target_oid=1)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_merge_features_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_merge_features(layer="Parcels", object_ids="[1,2,3]", target_oid=1)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_merge_features_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_merge_features(layer="Parcels", object_ids="[1,2,3]", target_oid=1)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_merge_features_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_merge_features(layer="Roads", object_ids="[4,5,6]", target_oid=4)
+        mock_call.assert_called_once_with(
+            "pro.mergeFeatures",
+            {"layer": "Roads", "objectIds": "[4,5,6]", "targetOid": "4"},
+        )
+
+    def test_pro_run_gp_tool_unavailable(self) -> None:
+        params = '["roads", "roads_buf", "50 Meters"]'
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_run_gp_tool(tool_name="Buffer", parameters=params)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_run_gp_tool_ok(self) -> None:
+        params = '["roads", "roads_buf", "50 Meters"]'
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_run_gp_tool(tool_name="Buffer", parameters=params)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_run_gp_tool_error(self) -> None:
+        params = '["roads", "roads_buf", "50 Meters"]'
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_run_gp_tool(tool_name="Buffer", parameters=params)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_run_gp_tool_forwards_op_and_args(self) -> None:
+        params = '["roads", "roads_buf", "50 Meters"]'
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_run_gp_tool(tool_name="Buffer", parameters=params)
+        mock_call.assert_called_once_with(
+            "pro.runGpTool",
+            {"toolName": "Buffer", "parameters": params},
+        )
+
+    def test_pro_list_gp_tools_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_gp_tools()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_gp_tools_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"toolCount": 5}):
+            result = server.pro_list_gp_tools()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_gp_tools_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_gp_tools()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_gp_tools_forwards_op_and_args_defaults(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_gp_tools()
+        mock_call.assert_called_once_with(
+            "pro.listGpTools",
+            {"searchText": "", "maxResults": "50"},
+        )
+
+    def test_pro_list_gp_tools_forwards_op_and_args_with_search(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_gp_tools(search_text="Buffer", max_results=10)
+        mock_call.assert_called_once_with(
+            "pro.listGpTools",
+            {"searchText": "Buffer", "maxResults": "10"},
+        )
+
+    def test_pro_copy_features_unavailable(self) -> None:
+        out = "C:\\out.gdb\\Parcels_Copy"
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_copy_features(layer="Parcels", output_path=out)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_copy_features_ok(self) -> None:
+        out = "C:\\out.gdb\\Parcels_Copy"
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_copy_features(layer="Parcels", output_path=out)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_copy_features_error(self) -> None:
+        out = "C:\\out.gdb\\Parcels_Copy"
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_copy_features(layer="Parcels", output_path=out)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_copy_features_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_copy_features(layer="Roads", output_path="C:\\out.gdb\\Roads_Copy")
+        mock_call.assert_called_once_with(
+            "pro.copyFeatures",
+            {"layer": "Roads", "outputPath": "C:\\out.gdb\\Roads_Copy"},
+        )
+
+    def test_pro_rename_layer_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_rename_layer(layer="Parcels", new_name="Parcels_Renamed")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_rename_layer_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_rename_layer(layer="Parcels", new_name="Parcels_Renamed")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_rename_layer_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_rename_layer(layer="Parcels", new_name="Parcels_Renamed")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_rename_layer_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_rename_layer(layer="Roads", new_name="Roads_V2")
+        mock_call.assert_called_once_with(
+            "pro.renameLayer",
+            {"layer": "Roads", "newName": "Roads_V2"},
+        )
+
+    def test_pro_get_layer_statistics_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_statistics(layer="Parcels", field="AREA")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_layer_statistics_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"min": 0, "max": 100, "mean": 50}):
+            result = server.pro_get_layer_statistics(layer="Parcels", field="AREA")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_layer_statistics_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_layer_statistics(layer="Parcels", field="AREA")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_layer_statistics_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_layer_statistics(layer="Roads", field="LENGTH")
+        mock_call.assert_called_once_with(
+            "pro.getLayerStatistics",
+            {"layer": "Roads", "field": "LENGTH"},
+        )
+
+    def test_pro_project_geometry_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_project_geometry(x=500000, y=6900000, from_wkid=28356, to_wkid=4326)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_project_geometry_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"x": 152.94, "y": -27.47}):
+            result = server.pro_project_geometry(x=500000, y=6900000, from_wkid=28356, to_wkid=4326)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_project_geometry_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_project_geometry(x=500000, y=6900000, from_wkid=28356, to_wkid=4326)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_project_geometry_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_project_geometry(x=500000, y=6900000, from_wkid=28356, to_wkid=4326)
+        mock_call.assert_called_once_with(
+            "pro.projectGeometry",
+            {"x": "500000", "y": "6900000", "fromWkid": "28356", "toWkid": "4326"},
+        )
+
+    # --- Phase 8: Layout & Map Automation ---
+
+    def test_pro_add_layout_text_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_text(layout_name="Layout1", text="Hello", x=10, y=20)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_layout_text_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"elementName": "Text_abc"}):
+            result = server.pro_add_layout_text(layout_name="Layout1", text="Hello", x=10, y=20)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_layout_text_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_text(layout_name="Layout1", text="Hello", x=10, y=20)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_layout_text_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layout_text(
+                layout_name="Layout1", text="Hello World", x=10, y=20,
+                font_size=14, color_rgb="255,0,0",
+            )
+        mock_call.assert_called_once_with(
+            "pro.addLayoutText",
+            {"layoutName": "Layout1", "text": "Hello World", "x": "10", "y": "20",
+             "fontSize": "14", "colorRgb": "255,0,0"},
+        )
+
+    def test_pro_add_layout_text_forwards_defaults(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layout_text(layout_name="L", text="Hi", x=0, y=0)
+        mock_call.assert_called_once_with(
+            "pro.addLayoutText",
+            {"layoutName": "L", "text": "Hi", "x": "0", "y": "0", "fontSize": "12"},
+        )
+
+    def test_pro_add_layout_picture_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_picture(
+                layout_name="L", image_path="C:\\img.png", x=0, y=0, width=100, height=50,
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_layout_picture_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_add_layout_picture(
+                layout_name="L", image_path="C:\\img.png", x=0, y=0, width=100, height=50,
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_layout_picture_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_picture(
+                layout_name="L", image_path="C:\\img.png", x=0, y=0, width=100, height=50,
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_layout_picture_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layout_picture(
+                layout_name="MyLayout",
+                image_path="D:\\photo.jpg",
+                x=50, y=100, width=200, height=150,
+            )
+        mock_call.assert_called_once_with(
+            "pro.addLayoutPicture",
+            {"layoutName": "MyLayout", "imagePath": "D:\\photo.jpg",
+             "x": "50", "y": "100", "width": "200", "height": "150"},
+        )
+
+    def test_pro_add_layout_legend_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_legend(layout_name="L", x=10, y=20)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_layout_legend_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_add_layout_legend(layout_name="L", x=10, y=20)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_layout_legend_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_legend(layout_name="L", x=10, y=20)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_layout_legend_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layout_legend(
+                layout_name="Layout1", x=5, y=5, map_frame_name="MapFrame1",
+            )
+        mock_call.assert_called_once_with(
+            "pro.addLayoutLegend",
+            {"layoutName": "Layout1", "x": "5", "y": "5", "mapFrameName": "MapFrame1"},
+        )
+
+    def test_pro_add_layout_legend_forwards_no_mapframe(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layout_legend(layout_name="L", x=0, y=0)
+        mock_call.assert_called_once_with(
+            "pro.addLayoutLegend",
+            {"layoutName": "L", "x": "0", "y": "0"},
+        )
+
+    def test_pro_add_layout_north_arrow_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_north_arrow(
+                layout_name="L", map_frame_name="MF1", x=10, y=20,
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_layout_north_arrow_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_add_layout_north_arrow(
+                layout_name="L", map_frame_name="MF1", x=10, y=20,
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_layout_north_arrow_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layout_north_arrow(
+                layout_name="L", map_frame_name="MF1", x=10, y=20,
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_layout_north_arrow_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layout_north_arrow(
+                layout_name="MyLayout", map_frame_name="MapFrame1", x=15, y=25,
+            )
+        mock_call.assert_called_once_with(
+            "pro.addLayoutNorthArrow",
+            {"layoutName": "MyLayout", "mapFrameName": "MapFrame1", "x": "15", "y": "25"},
+        )
+
+    def test_pro_remove_layout_element_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_remove_layout_element(layout_name="L", element_name="Text1")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_remove_layout_element_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_remove_layout_element(layout_name="L", element_name="Text1")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_remove_layout_element_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_remove_layout_element(layout_name="L", element_name="Text1")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_remove_layout_element_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_remove_layout_element(layout_name="Layout1", element_name="MyImage")
+        mock_call.assert_called_once_with(
+            "pro.removeLayoutElement",
+            {"layoutName": "Layout1", "elementName": "MyImage"},
+        )
+
+    def test_pro_create_layout_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_layout(layout_name="L", width=297, height=210)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_create_layout_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_create_layout(layout_name="L", width=297, height=210)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_layout_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_layout(layout_name="L", width=297, height=210)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_create_layout_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_layout(layout_name="A3_Layout", width=420, height=297, units="MM")
+        mock_call.assert_called_once_with(
+            "pro.createLayout",
+            {"layoutName": "A3_Layout", "width": "420", "height": "297", "units": "MM"},
+        )
+
+    def test_pro_create_layout_forwards_default_units(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_layout(layout_name="L", width=100, height=50)
+        mock_call.assert_called_once_with(
+            "pro.createLayout",
+            {"layoutName": "L", "width": "100", "height": "50", "units": "MM"},
+        )
+
+    def test_pro_create_map_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_map(map_name="NewMap")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_create_map_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_create_map(map_name="NewMap")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_map_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_map(map_name="NewMap")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_create_map_forwards_op_and_args_defaults(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_map(map_name="MyMap")
+        mock_call.assert_called_once_with(
+            "pro.createMap",
+            {"mapName": "MyMap", "mapType": "Map"},
+        )
+
+    def test_pro_create_map_forwards_with_scene_and_basemap(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_map(map_name="Scene1", map_type="LocalScene", basemap="Imagery")
+        mock_call.assert_called_once_with(
+            "pro.createMap",
+            {"mapName": "Scene1", "mapType": "LocalScene", "basemap": "Imagery"},
+        )
+
+    def test_pro_add_basemap_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_basemap(basemap_name="Streets")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_basemap_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_add_basemap(basemap_name="Imagery")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_basemap_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_basemap(basemap_name="Streets")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_basemap_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_basemap(basemap_name="Topographic")
+        mock_call.assert_called_once_with(
+            "pro.addBasemap",
+            {"basemapName": "Topographic"},
+        )
+
+    # --- Phase 9: Advanced 3D & Visualization ---
+
+    def test_pro_set_atmosphere_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_atmosphere(fog_density=50)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_atmosphere_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_atmosphere(fog_density=30, horizon_fog=True)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_atmosphere_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_atmosphere(fog_density=50)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_atmosphere_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_atmosphere(fog_density=75, horizon_fog=True, fog_color="100,150,200")
+        mock_call.assert_called_once_with(
+            "pro.setAtmosphere",
+            {"fogDensity": "75", "horizonFog": "true", "fogColor": "100,150,200"},
+        )
+
+    def test_pro_set_atmosphere_forwards_defaults(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_atmosphere(fog_density=0)
+        mock_call.assert_called_once_with(
+            "pro.setAtmosphere",
+            {"fogDensity": "0", "horizonFog": "false"},
+        )
+
+    def test_pro_set_sun_position_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_sun_position(azimuth=180, altitude=45)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_sun_position_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_sun_position(azimuth=90, altitude=30)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_sun_position_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_sun_position(azimuth=270, altitude=60)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_sun_position_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_sun_position(azimuth=135, altitude=22.5)
+        mock_call.assert_called_once_with(
+            "pro.setSunPosition",
+            {"azimuth": "135", "altitude": "22.5"},
+        )
+
+    def test_pro_get_sun_position_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_sun_position()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_get_sun_position_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"azimuth": 180, "altitude": 45}):
+            result = server.pro_get_sun_position()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_get_sun_position_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_sun_position()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_get_sun_position_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_get_sun_position()
+        mock_call.assert_called_once_with("pro.getSunPosition", None)
+
+    def test_pro_explore_3d_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_explore_3d(x=500000, y=6900000, target_z=100, distance=500)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_explore_3d_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_explore_3d(x=500000, y=6900000, target_z=100, distance=500)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_explore_3d_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_explore_3d(x=500000, y=6900000, target_z=100, distance=500)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_explore_3d_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_explore_3d(
+                x=500000, y=6900000, target_z=200,
+                distance=1000, heading_delta=45, pitch_delta=-10,
+            )
+        mock_call.assert_called_once_with(
+            "pro.explore3D",
+            {"x": "500000", "y": "6900000", "targetZ": "200",
+             "distance": "1000", "headingDelta": "45", "pitchDelta": "-10"},
+        )
+
+    def test_pro_explore_3d_forwards_without_deltas(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_explore_3d(x=0, y=0, target_z=50, distance=300)
+        mock_call.assert_called_once_with(
+            "pro.explore3D",
+            {"x": "0", "y": "0", "targetZ": "50", "distance": "300"},
+        )
+
+    def test_pro_set_layer_elevation_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_elevation(
+                layer="Parcels", elevation_mode="absolute", z_offset=50,
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_layer_elevation_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_layer_elevation(
+                layer="Parcels", elevation_mode="relative", z_offset=10,
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_layer_elevation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_layer_elevation(
+                layer="Parcels", elevation_mode="dra", z_offset=0,
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_layer_elevation_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_layer_elevation(
+                layer="Buildings", elevation_mode="absolute", z_offset=100,
+            )
+        mock_call.assert_called_once_with(
+            "pro.setLayerElevation",
+            {"layer": "Buildings", "elevationMode": "absolute", "zOffset": "100"},
+        )
+
+    def test_pro_set_scene_background_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_scene_background(r=255, g=128, b=0)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_scene_background_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_scene_background(r=100, g=150, b=200)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_scene_background_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_scene_background(r=0, g=0, b=0)
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_scene_background_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_scene_background(r=50, g=100, b=150, background_type="none")
+        mock_call.assert_called_once_with(
+            "pro.setSceneBackground",
+            {"r": "50", "g": "100", "b": "150", "backgroundType": "none"},
+        )
+
+    def test_pro_set_scene_background_forwards_default_type(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_scene_background(r=255, g=255, b=255)
+        mock_call.assert_called_once_with(
+            "pro.setSceneBackground",
+            {"r": "255", "g": "255", "b": "255", "backgroundType": "color"},
+        )
+
+    # --- Phase 10: Project & Data Management ---
+
+    def test_pro_create_feature_class_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_feature_class(
+                gdb_path="C:\\data.gdb", name="NewFC", geometry_type="Polygon",
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_create_feature_class_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_create_feature_class(
+                gdb_path="C:\\data.gdb", name="Points", geometry_type="Point",
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_feature_class_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_feature_class(
+                gdb_path="C:\\data.gdb", name="BadFC", geometry_type="Polyline",
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_create_feature_class_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_feature_class(
+                gdb_path="C:\\proj.gdb", name="Roads", geometry_type="Polyline",
+                wkid=28356, fields_json='[{"fieldName":"Name","fieldType":"TEXT"}]',
+            )
+        mock_call.assert_called_once_with(
+            "pro.createFeatureClass",
+            {"gdbPath": "C:\\proj.gdb", "name": "Roads", "geometryType": "Polyline",
+             "wkid": "28356", "fieldsJson": '[{"fieldName":"Name","fieldType":"TEXT"}]'},
+        )
+
+    def test_pro_create_feature_class_forwards_minimal(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_create_feature_class(
+                gdb_path="C:\\data.gdb", name="FC", geometry_type="Point",
+            )
+        mock_call.assert_called_once_with(
+            "pro.createFeatureClass",
+            {"gdbPath": "C:\\data.gdb", "name": "FC", "geometryType": "Point"},
+        )
+
+    def test_pro_delete_feature_class_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_feature_class(path="C:\\data.gdb\\OldFC")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_delete_feature_class_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_delete_feature_class(path="C:\\data.gdb\\ToDelete")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_delete_feature_class_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_delete_feature_class(path="C:\\data.gdb\\Missing")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_delete_feature_class_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_delete_feature_class(path="C:\\proj.gdb\\OldParcels")
+        mock_call.assert_called_once_with(
+            "pro.deleteFeatureClass",
+            {"path": "C:\\proj.gdb\\OldParcels"},
+        )
+
+    def test_pro_save_project_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_save_project()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_save_project_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"path": "C:\\project.aprx"}):
+            result = server.pro_save_project()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_save_project_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_save_project()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_save_project_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_save_project()
+        mock_call.assert_called_once_with("pro.saveProject", None)
+
+    def test_pro_add_attribute_index_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_attribute_index(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_attribute_index_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_add_attribute_index(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_attribute_index_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_attribute_index(layer="Parcels", field="ZONE")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_attribute_index_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_attribute_index(
+                layer="Roads", field="ROAD_NAME", index_name="idx_road_name", unique=True,
+            )
+        mock_call.assert_called_once_with(
+            "pro.addAttributeIndex",
+            {"layer": "Roads", "field": "ROAD_NAME",
+             "indexName": "idx_road_name", "unique": "true"},
+        )
+
+    def test_pro_search_address_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_search_address(address="123 Main St")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_search_address_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"resultCount": 2}):
+            result = server.pro_search_address(address="Brisbane")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_search_address_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_search_address(address="Nowhere")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_search_address_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_search_address(address="1 George St", max_results=5)
+        mock_call.assert_called_once_with(
+            "pro.searchAddress",
+            {"address": "1 George St", "maxResults": "5"},
+        )
+
+    def test_pro_open_attribute_table_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_open_attribute_table(layer="Parcels")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_open_attribute_table_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_open_attribute_table(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_open_attribute_table_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_open_attribute_table(layer="Parcels")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_open_attribute_table_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_open_attribute_table(layer="Roads")
+        mock_call.assert_called_once_with(
+            "pro.openAttributeTable",
+            {"layer": "Roads"},
+        )
+
+    # --- Phase 11: Data Exchange ---
+
+    def test_pro_export_to_csv_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_csv(layer="Parcels", output_path="C:\\out.csv")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_export_to_csv_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"rowCount": 100}):
+            result = server.pro_export_to_csv(layer="Parcels", output_path="C:\\out.csv")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_export_to_csv_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_csv(layer="Parcels", output_path="C:\\out.csv")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_export_to_csv_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_export_to_csv(layer="Roads", output_path="D:\\data\\roads.csv")
+        mock_call.assert_called_once_with(
+            "pro.exportToCsv",
+            {"layer": "Roads", "outputPath": "D:\\data\\roads.csv"},
+        )
+
+    def test_pro_export_to_geo_json_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_geo_json(layer="Parcels", output_path="C:\\out.geojson")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_export_to_geo_json_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_export_to_geo_json(layer="Parcels", output_path="C:\\out.geojson")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_export_to_geo_json_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_geo_json(layer="Parcels", output_path="C:\\out.geojson")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_export_to_geo_json_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_export_to_geo_json(layer="Buildings", output_path="D:\\buildings.geojson")
+        mock_call.assert_called_once_with(
+            "pro.exportToGeoJSON",
+            {"layer": "Buildings", "outputPath": "D:\\buildings.geojson"},
+        )
+
+    def test_pro_import_csv_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_import_csv(
+                csv_path="C:\\data.csv", gdb_path="C:\\proj.gdb",
+                fc_name="Points", x_field="X", y_field="Y",
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_import_csv_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"rowCount": 50}):
+            result = server.pro_import_csv(
+                csv_path="C:\\data.csv", gdb_path="C:\\proj.gdb",
+                fc_name="Points", x_field="Lon", y_field="Lat",
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_import_csv_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_import_csv(
+                csv_path="C:\\data.csv", gdb_path="C:\\proj.gdb",
+                fc_name="Points", x_field="X", y_field="Y",
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_import_csv_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_import_csv(
+                csv_path="D\\survey.csv", gdb_path="C:\\proj.gdb",
+                fc_name="SurveyPts", x_field="Easting", y_field="Northing",
+                wkid=28356,
+            )
+        mock_call.assert_called_once_with(
+            "pro.importCsv",
+            {"csvPath": "D\\survey.csv", "gdbPath": "C:\\proj.gdb",
+             "fcName": "SurveyPts", "xField": "Easting",
+             "yField": "Northing", "wkid": "28356"},
+        )
+
+    def test_pro_export_to_shapefile_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_shapefile(layer="Parcels", output_path="C:\\parcels.shp")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_export_to_shapefile_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_export_to_shapefile(layer="Parcels", output_path="C:\\parcels.shp")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_export_to_shapefile_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_shapefile(layer="Parcels", output_path="C:\\parcels.shp")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_export_to_shapefile_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_export_to_shapefile(layer="Roads", output_path="D:\\roads.shp")
+        mock_call.assert_called_once_with(
+            "pro.exportToShapefile",
+            {"layer": "Roads", "outputPath": "D:\\roads.shp"},
+        )
+
+    def test_pro_export_to_kml_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_kml(layer="Parcels", output_path="C:\\parcels.kmz")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_export_to_kml_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_export_to_kml(layer="Parcels", output_path="C:\\parcels.kmz")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_export_to_kml_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_to_kml(layer="Parcels", output_path="C:\\parcels.kmz")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_export_to_kml_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_export_to_kml(layer="Buildings", output_path="C:\\buildings.kmz")
+        mock_call.assert_called_once_with(
+            "pro.exportToKml",
+            {"layer": "Buildings", "outputPath": "C:\\buildings.kmz"},
+        )
+
+    def test_pro_import_geo_json_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_import_geo_json(
+                geojson_path="C:\\data.geojson", gdb_path="C:\\proj.gdb", fc_name="Imported",
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_import_geo_json_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"rowCount": 25}):
+            result = server.pro_import_geo_json(
+                geojson_path="C:\\data.geojson", gdb_path="C:\\proj.gdb", fc_name="Imported",
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_import_geo_json_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_import_geo_json(
+                geojson_path="C:\\data.geojson", gdb_path="C:\\proj.gdb", fc_name="Imported",
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_import_geo_json_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_import_geo_json(
+                geojson_path="D:\\buildings.geojson", gdb_path="C:\\proj.gdb", fc_name="Buildings",
+            )
+        mock_call.assert_called_once_with(
+            "pro.importGeoJSON",
+            {"geojsonPath": "D:\\buildings.geojson",
+             "gdbPath": "C:\\proj.gdb", "fcName": "Buildings"},
+        )
+
+    # --- Phase 12: Pro GUI Automation ---
+
+    def test_pro_show_message_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_show_message(message="Hello")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_show_message_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_show_message(message="Done", type="info")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_show_message_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_show_message(message="Error")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_show_message_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_show_message(message="Processing complete", type="warning", title="Alert")
+        mock_call.assert_called_once_with(
+            "pro.showMessage",
+            {"message": "Processing complete", "type": "warning", "title": "Alert"},
+        )
+
+    def test_pro_show_message_forwards_defaults(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_show_message(message="Hi")
+        mock_call.assert_called_once_with(
+            "pro.showMessage",
+            {"message": "Hi", "type": "info"},
+        )
+
+    def test_pro_show_progress_dialog_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_show_progress_dialog(title="Working", message="Please wait")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_show_progress_dialog_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_show_progress_dialog(title="Processing", message="Analyzing...")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_show_progress_dialog_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_show_progress_dialog(title="Failed", message="Error")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_show_progress_dialog_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_show_progress_dialog(title="Exporting", message="Writing features...")
+        mock_call.assert_called_once_with(
+            "pro.showProgressDialog",
+            {"title": "Exporting", "message": "Writing features..."},
+        )
+
+    def test_pro_set_status_bar_progress_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_status_bar_progress(percent=50, message="Halfway")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_set_status_bar_progress_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_set_status_bar_progress(percent=75, message="Almost done")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_set_status_bar_progress_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_status_bar_progress(percent=0, message="Start")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_set_status_bar_progress_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_set_status_bar_progress(percent=100, message="Complete")
+        mock_call.assert_called_once_with(
+            "pro.setStatusBarProgress",
+            {"percent": "100", "message": "Complete"},
+        )
+
+    def test_pro_list_dockpanes_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_dockpanes()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_dockpanes_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"dockpaneCount": 9}):
+            result = server.pro_list_dockpanes()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_dockpanes_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_dockpanes()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_dockpanes_forwards_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_list_dockpanes()
+        mock_call.assert_called_once_with("pro.listDockpanes", None)
+
+    def test_pro_activate_ribbon_tab_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_activate_ribbon_tab(tab_id="Map")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_activate_ribbon_tab_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_activate_ribbon_tab(tab_id="Edit")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_activate_ribbon_tab_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_activate_ribbon_tab(tab_id="View")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_activate_ribbon_tab_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_activate_ribbon_tab(tab_id="Analysis")
+        mock_call.assert_called_once_with(
+            "pro.activateRibbonTab",
+            {"tabId": "Analysis"},
+        )
+
+    # --- Phase 13: Schema Management ---
+
+    def test_pro_list_domains_unavailable(self) -> None:
+        result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
+        assert result["status"] == "unavailable"
+
+    def test_pro_list_domains_ok(self) -> None:
+        result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
+        assert isinstance(result, dict)
+
+    def test_pro_list_domains_error(self) -> None:
+        result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
+        assert isinstance(result, dict)
+
+    def test_pro_list_domains_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
+        mock_call.assert_called_once_with(
+            "pro.listDomains",
+            {"gdbPath": r"C:\data\test.gdb"},
+        )
+
+    def test_pro_create_domain_unavailable(self) -> None:
+        result = server.pro_create_domain(
+            gdb_path=r"C:\data\test.gdb", name="ZoneType",
+            description="Zone type codes", field_type="String",
+            coded_values='{"R":"Residential","C":"Commercial"}')
+        assert result["status"] == "unavailable"
+
+    def test_pro_create_domain_ok(self) -> None:
+        result = server.pro_create_domain(
+            gdb_path=r"C:\data\test.gdb", name="ZoneType",
+            description="Zone type codes", field_type="String",
+            coded_values='{"R":"Residential","C":"Commercial"}')
+        assert isinstance(result, dict)
+
+    def test_pro_create_domain_error(self) -> None:
+        result = server.pro_create_domain(
+            gdb_path=r"C:\data\test.gdb", name="ZoneType",
+            description="Zone type codes", field_type="String",
+            coded_values='{"R":"Residential","C":"Commercial"}')
+        assert isinstance(result, dict)
+
+    def test_pro_create_domain_forwards_op_and_args(self) -> None:
+        cv_json = '{"R":"Residential","C":"Commercial"}'
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_create_domain(
+                gdb_path=r"C:\data\test.gdb", name="ZoneType",
+                description="Zone type codes", field_type="String",
+                coded_values=cv_json)
+        mock_call.assert_called_once_with(
+            "pro.createDomain",
+            {"gdbPath": r"C:\data\test.gdb", "name": "ZoneType",
+             "description": "Zone type codes", "fieldType": "String",
+             "codedValues": cv_json},
+        )
+
+    def test_pro_assign_domain_to_field_unavailable(self) -> None:
+        result = server.pro_assign_domain_to_field(
+            layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+        assert result["status"] == "unavailable"
+
+    def test_pro_assign_domain_to_field_ok(self) -> None:
+        result = server.pro_assign_domain_to_field(
+            layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+        assert isinstance(result, dict)
+
+    def test_pro_assign_domain_to_field_error(self) -> None:
+        result = server.pro_assign_domain_to_field(
+            layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+        assert isinstance(result, dict)
+
+    def test_pro_assign_domain_to_field_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_assign_domain_to_field(
+                layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+        mock_call.assert_called_once_with(
+            "pro.assignDomainToField",
+            {"layer": "Parcels", "field": "ZoneCode", "domainName": "ZoneType"},
+        )
+
+    def test_pro_list_subtypes_unavailable(self) -> None:
+        result = server.pro_list_subtypes(layer="Parcels")
+        assert result["status"] == "unavailable"
+
+    def test_pro_list_subtypes_ok(self) -> None:
+        result = server.pro_list_subtypes(layer="Parcels")
+        assert isinstance(result, dict)
+
+    def test_pro_list_subtypes_error(self) -> None:
+        result = server.pro_list_subtypes(layer="Parcels")
+        assert isinstance(result, dict)
+
+    def test_pro_list_subtypes_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_list_subtypes(layer="Parcels")
+        mock_call.assert_called_once_with(
+            "pro.listSubtypes",
+            {"layer": "Parcels"},
+        )
+
+    def test_pro_set_subtype_field_unavailable(self) -> None:
+        result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
+        assert result["status"] == "unavailable"
+
+    def test_pro_set_subtype_field_ok(self) -> None:
+        result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
+        assert isinstance(result, dict)
+
+    def test_pro_set_subtype_field_error(self) -> None:
+        result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
+        assert isinstance(result, dict)
+
+    def test_pro_set_subtype_field_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
+        mock_call.assert_called_once_with(
+            "pro.setSubtypeField",
+            {"layer": "Parcels", "field": "ZoneCode"},
+        )
+
+    def test_pro_enable_attachments_unavailable(self) -> None:
+        result = server.pro_enable_attachments(layer="Parcels")
+        assert result["status"] == "unavailable"
+
+    def test_pro_enable_attachments_ok(self) -> None:
+        result = server.pro_enable_attachments(layer="Parcels")
+        assert isinstance(result, dict)
+
+    def test_pro_enable_attachments_error(self) -> None:
+        result = server.pro_enable_attachments(layer="Parcels")
+        assert isinstance(result, dict)
+
+    def test_pro_enable_attachments_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_enable_attachments(layer="Parcels")
+        mock_call.assert_called_once_with(
+            "pro.enableAttachments",
+            {"layer": "Parcels"},
+        )
+
+    # --- Phase 14: Advanced Geoprocessing ---
+
+    def test_pro_list_toolboxes_unavailable(self) -> None:
+        result = server.pro_list_toolboxes()
+        assert result["status"] == "unavailable"
+
+    def test_pro_list_toolboxes_ok(self) -> None:
+        result = server.pro_list_toolboxes()
+        assert isinstance(result, dict)
+
+    def test_pro_list_toolboxes_error(self) -> None:
+        result = server.pro_list_toolboxes()
+        assert isinstance(result, dict)
+
+    def test_pro_list_toolboxes_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_list_toolboxes()
+        mock_call.assert_called_once_with(
+            "pro.listToolboxes", {},
+        )
+
+    def test_pro_describe_tool_unavailable(self) -> None:
+        result = server.pro_describe_tool(tool_name="Buffer_analysis")
+        assert result["status"] == "unavailable"
+
+    def test_pro_describe_tool_ok(self) -> None:
+        result = server.pro_describe_tool(tool_name="Buffer_analysis")
+        assert isinstance(result, dict)
+
+    def test_pro_describe_tool_error(self) -> None:
+        result = server.pro_describe_tool(tool_name="Buffer_analysis")
+        assert isinstance(result, dict)
+
+    def test_pro_describe_tool_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_describe_tool(tool_name="Buffer_analysis")
+        mock_call.assert_called_once_with(
+            "pro.describeTool", {"toolName": "Buffer_analysis"},
+        )
+
+    def test_pro_get_geoprocessing_history_unavailable(self) -> None:
+        result = server.pro_get_geoprocessing_history()
+        assert result["status"] == "unavailable"
+
+    def test_pro_get_geoprocessing_history_ok(self) -> None:
+        result = server.pro_get_geoprocessing_history()
+        assert isinstance(result, dict)
+
+    def test_pro_get_geoprocessing_history_error(self) -> None:
+        result = server.pro_get_geoprocessing_history(count=5)
+        assert isinstance(result, dict)
+
+    def test_pro_get_geoprocessing_history_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_get_geoprocessing_history(count=10)
+        mock_call.assert_called_once_with(
+            "pro.getGeoprocessingHistory", {"count": "10"},
+        )
+
+    def test_pro_run_python_script_unavailable(self) -> None:
+        result = server.pro_run_python_script(code="print('hello')")
+        assert result["status"] == "unavailable"
+
+    def test_pro_run_python_script_ok(self) -> None:
+        code = "import arcpy; print(arcpy.GetInstallInfo()['Version'])"
+        result = server.pro_run_python_script(code=code)
+        assert isinstance(result, dict)
+
+    def test_pro_run_python_script_error(self) -> None:
+        code = "import arcpy; print(arcpy.GetInstallInfo()['Version'])"
+        result = server.pro_run_python_script(code=code, timeout_seconds=30)
+        assert isinstance(result, dict)
+
+    def test_pro_run_python_script_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_run_python_script(code="print('hello')", timeout_seconds=30)
+        mock_call.assert_called_once_with(
+            "pro.runPythonScript",
+            {"code": "print('hello')", "timeoutSeconds": "30"},
+        )
+
+    def test_pro_set_environment_unavailable(self) -> None:
+        result = server.pro_set_environment(key="workspace", value=r"C:\data\test.gdb")
+        assert result["status"] == "unavailable"
+
+    def test_pro_set_environment_ok(self) -> None:
+        result = server.pro_set_environment(key="workspace", value=r"C:\data\test.gdb")
+        assert isinstance(result, dict)
+
+    def test_pro_set_environment_error(self) -> None:
+        result = server.pro_set_environment(key="cellSize", value="30")
+        assert isinstance(result, dict)
+
+    def test_pro_set_environment_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_set_environment(key="overwriteOutput", value="true")
+        mock_call.assert_called_once_with(
+            "pro.setEnvironment",
+            {"key": "overwriteOutput", "value": "true"},
+        )
+
+    def test_pro_get_environment_unavailable(self) -> None:
+        result = server.pro_get_environment()
+        assert result["status"] == "unavailable"
+
+    def test_pro_get_environment_ok(self) -> None:
+        result = server.pro_get_environment(key="workspace")
+        assert isinstance(result, dict)
+
+    def test_pro_get_environment_error(self) -> None:
+        result = server.pro_get_environment(key="cellSize")
+        assert isinstance(result, dict)
+
+    def test_pro_get_environment_forwards_op_and_args_key(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_get_environment(key="workspace")
+        mock_call.assert_called_once_with(
+            "pro.getEnvironment", {"key": "workspace"},
+        )
+
+    def test_pro_get_environment_forwards_op_and_args_no_key(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_get_environment()
+        mock_call.assert_called_once_with(
+            "pro.getEnvironment", {},
+        )
 
 
 if __name__ == "__main__":

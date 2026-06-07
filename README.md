@@ -8,12 +8,14 @@ A local MCP server that connects AI agents (OpenCode, Trae, Cursor, Claude Deskt
 - Allows AI to execute ArcPy geoprocessing operations (Buffer, Clip, Merge)
 - Provides structured access to `.aprx` projects and `.gdb` databases
 - Generates and executes ArcPy scripts with user confirmation
+- **Real-time ArcGIS Pro interaction** via C# Add-In (zoom to layers, select features, inspect live map state)
 
 ## Prerequisites
 
 - Windows with ArcGIS Pro installed
 - Python 3.11 or higher
 - `uv` package manager (recommended) or `pip`
+- For real-time Add-In features: Visual Studio 2022 with ArcGIS Pro SDK for .NET (one-time build)
 
 ## Quickstart
 
@@ -55,7 +57,20 @@ Run `/mcp` to verify `arcgis-pro` shows Connected.
 Ask OpenCode:
 > Run a health check, then summarize the parcels layer in my project.
 
+### 5. (Optional) Install the ArcGIS Pro Add-In for Real-Time Access
+
+Build and install the C# Add-In to enable live interaction with the active ArcGIS Pro session:
+
+1. Open `addin/APBridgeAddIn/APBridgeAddIn.csproj` in **Visual Studio 2022** with ArcGIS Pro SDK installed
+2. Build the solution (produces `APBridgeAddIn.esriAddInX`)
+3. Double-click the `.esriAddInX` file to install into ArcGIS Pro
+4. Start (or restart) ArcGIS Pro — the Named Pipe bridge starts automatically
+
+After installation, all `pro.*` tools in the table below will work against the live Pro session.
+
 ## Available Tools
+
+### GIS Data Tools
 
 | Tool | Description |
 |------|-------------|
@@ -70,6 +85,11 @@ Ask OpenCode:
 | `clip_features` | Clip geoprocessing tool |
 | `execute_arcpy_code` | Run arbitrary ArcPy code |
 | `generate_sync_plan` | Generate sync plan |
+
+### Raster Suitability Analysis Tools
+
+| Tool | Description |
+|------|-------------|
 | `validate_project_data` | Pre-flight data validation |
 | `prepare_analysis_inputs` | Clip, resample, slope, distance rasters |
 | `reclassify_criteria` | Batch reclassify rasters to 1-5 scale |
@@ -78,6 +98,22 @@ Ask OpenCode:
 | `raster_area_summary` | Area statistics by class |
 | `sensitivity_check` | Weight perturbation sensitivity analysis |
 | `export_suitability_map` | Layout creation and PDF/PNG export |
+
+### Real-Time Add-In Tools (requires APBridgeAddIn)
+
+| Tool | Description |
+|------|-------------|
+| `pro_ping` | Ping the Add-In to verify Named Pipe connectivity |
+| `pro_get_active_map_name` | Get the active map name |
+| `pro_list_layers` | List all layers with visibility and type |
+| `pro_count_features` | Count features in a named layer |
+| `pro_get_layer_schema` | Get field schema of a layer |
+| `pro_get_selection_count` | Count selected features in a layer |
+| `pro_select_by_attribute` | Select features by SQL where clause |
+| `pro_clear_selection` | Clear selection on a layer or all layers |
+| `pro_zoom_to_layer` | Zoom to a layer's extent |
+| `pro_get_current_extent` | Get current map view extent |
+| `pro_pan_to_extent` | Pan to a specified bounding box |
 
 ## Available Resources
 

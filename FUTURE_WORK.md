@@ -1,10 +1,10 @@
 # Future Development
 
-## Option 2: C# Add-In + .NET MCP (Real-time Project Access)
+## Option 2: C# Add-In (Real-time Project Access)
 
-This document describes a future enhancement for real-time, in-process access to ArcGIS Pro through a C# Add-In and .NET 8 MCP server.
+This document describes real-time, in-process access to ArcGIS Pro through a C# Add-In.
 
-**Status:** Not implemented - future work
+**Status:** Implemented in `addin/APBridgeAddIn/` — communicates with the Python MCP server via `arcgis_mcp_named_pipe.py` over Named Pipes.
 
 ---
 
@@ -22,104 +22,68 @@ The current Python MCP server (this repo) accesses ArcGIS Pro projects via `.apr
 ## Architecture Overview
 
 ```
-OpenCode / Claude / MCP Client
+OpenCode / MCP Client
     |
     v
-.NET 8 MCP Server (Named Pipe Client)
+Python MCP Server (arcgis_mcp_server.py)
     |
-    v
-Named Pipe IPC
+    ├── geoprocessing tools → ArcPy subprocess (existing)
     |
-    v
-ArcGIS Pro Add-In (C#) (Named Pipe Server)
-    |
-    v
-ArcGIS Pro SDK (in-process)
-    |
-    v
-ArcGIS Pro (active map, layers, selections)
+    └── pro.* tools → Named Pipe (pywin32) → APBridgeAddIn (in-process Pro SDK)
+                                                    |
+                                                    v
+                                             ArcGIS Pro SDK
+                                        (MapView.Active, layers, etc.)
 ```
 
 ---
 
 ## Prerequisites
 
-- Visual Studio 2022 **17.14 or later** (for MCP Agent Mode support)
-- ArcGIS Pro SDK for .NET
+- Visual Studio 2022 (with ArcGIS Pro SDK for .NET) — for one-time Add-In build
 - ArcGIS Pro installed
-- .NET 8 SDK
+- Python 3.11+ with `pywin32`
 
 ---
 
 ## Implementation Reference
 
-This approach is demonstrated by [nicogis/MCP-Server-ArcGIS-Pro-AddIn](https://github.com/nicogis/MCP-Server-ArcGIS-Pro-AddIn).
+This approach was inspired by [nicogis/MCP-Server-ArcGIS-Pro-AddIn](https://github.com/nicogis/MCP-Server-ArcGIS-Pro-AddIn), adapted to use the Python MCP server directly as the Named Pipe client instead of a separate .NET MCP server.
 
-Key features from that implementation:
+Key features integrated:
 - Named Pipe IPC for in-process communication
 - `MapView.Active` access for real-time map state
-- Tools: `pro.getActiveMapName`, `pro.listLayers`, `pro.countFeatures`, `pro.zoomToLayer`
+- 10 tools covering map, layer, selection, and extent operations
 
 ---
 
-## Planned Tools (Option 2)
+## Implemented Tools
 
 | Tool | Description |
 |------|-------------|
-| `pro.getActiveMapName` | Get name of active map |
-| `pro.listLayers` | List all layers in active map |
-| `pro.countFeatures` | Count features in a layer |
-| `pro.zoomToLayer` | Zoom to specified layer |
-| `pro.selectByAttribute` | Select features by SQL query |
-| `pro.getCurrentExtent` | Get current map extent |
-| `pro.exportLayer` | Export layer to file |
+| `pro_ping` | Ping Add-In pipe connectivity |
+| `pro_get_active_map_name` | Get name of active map |
+| `pro_list_layers` | List all layers with visibility and type |
+| `pro_count_features` | Count features in a layer |
+| `pro_get_layer_schema` | Get field schema of a layer |
+| `pro_get_selection_count` | Count selected features |
+| `pro_select_by_attribute` | Select features by SQL |
+| `pro_clear_selection` | Clear selection on layer or all |
+| `pro_zoom_to_layer` | Zoom to layer extent |
+| `pro_get_current_extent` | Get current map extent |
+| `pro_pan_to_extent` | Pan to bounding box |
 
 ---
 
-## When to Consider Option 2
+## When to Use Add-In Tools
 
-Choose Option 2 (C# Add-In) when you need:
+Use `pro.*` tools (requires Add-In) when you need:
 - Real-time access to currently open ArcGIS Pro project
 - Live layer selections and map state
 - Zoom/pan operations from AI
 - Integration with Pro's active editing session
 
-Stick with current Python MCP when:
+Stick with existing `arcgis.*` tools when:
 - You need to work without ArcGIS Pro running
-- You prefer Python development
-- You want simpler setup
-
----
-
-## Implementation Steps
-
-1. Create ArcGIS Pro Add-In project using ArcGIS Pro SDK template
-2. Implement Named Pipe server in Add-In's `Module.cs`
-3. Create .NET 8 MCP server console app
-4. Implement Named Pipe client in MCP server
-5. Define MCP tools that map to IPC operations
-6. Test with Visual Studio Copilot Agent Mode
-7. Document setup
-
----
-
-## Time Estimate
-
-| Phase | Task | Effort |
-|-------|------|--------|
-| 1 | Set up VS2022 + ArcGIS Pro SDK | 1-2 hours |
-| 2 | Create Add-In with Named Pipe server | 2-3 hours |
-| 3 | Create .NET MCP server | 2 hours |
-| 4 | Wire tools and test | 2-3 hours |
-| 5 | Documentation | 1 hour |
-
-**Total: 8-11 hours**
-
----
-
-## Open Questions
-
-1. Should Option 2 replace Option 1 or coexist?
-2. Shared tool namespacing (`pro.*` vs `arcgis.*`)?
-3. Configuration via environment or config file?
-4. Support for multiple concurrent ArcGIS Pro sessions?
+- You prefer not to install the Add-In
+- You need geoprocessing/raster analysis operations

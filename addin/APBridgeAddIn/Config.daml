@@ -1,0 +1,30 @@
+<ArcGIS defaultAssembly="APBridgeAddIn.dll" defaultNamespace="APBridgeAddIn" xmlns="http://schemas.esri.com/DADF/Registry" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
+  <AddInInfo id="{56c9c0f7-2a8e-4b3d-9f1a-7e5d2c8b1a4f}" version="1.0" desktopVersion="3.5.57366" product="ArcGISPro">
+    <Name>APBridgeAddIn</Name>
+    <Description>Named Pipe bridge for real-time ArcGIS Pro MCP access.</Description>
+    <Image>Images\AddinDesktop32.png</Image>
+    <Author>arcgis-opencode-mcp</Author>
+    <Company></Company>
+    <Date>2026-06-07</Date>
+    <Subject>Framework</Subject>
+  </AddInInfo>
+  <modules>
+    <insertModule id="APBridgeAddIn_Module" className="Module1" autoLoad="true" caption="ArcGIS Pro Bridge">
+      <tabs>
+        <tab id="APBridgeAddIn_Tab1" caption="ArcGIS Bridge">
+          <group refID="APBridgeAddIn_Group1"/>
+        </tab>
+      </tabs>
+      <groups>
+        <group id="APBridgeAddIn_Group1" caption="Bridge Control" appearsOnAddInTab="true">
+          <button refID="APBridgeAddIn_Button1" size="large" />
+        </group>
+      </groups>
+      <controls>
+        <button id="APBridgeAddIn_Button1" caption="Restart Bridge Server" className="Button1" loadOnClick="true" smallImage="GenericButtonBlue16" largeImage="GenericButtonBlue32">
+          <tooltip heading="ArcGIS Pro Bridge">Restart the Named Pipe bridge server for MCP integration.<disabledText /></tooltip>
+        </button>
+      </controls>
+    </insertModule>
+  </modules>
+</ArcGIS>
