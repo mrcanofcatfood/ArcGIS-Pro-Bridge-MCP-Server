@@ -1,9 +1,12 @@
-# AI 代理与本地治理文档
+# AI agent and local governance docs
 .agentdocs/
 CLAUDE.md
-AGENTS.md
+# AGENTS.md - Unignored for OpenCode integration
 
-# Python 虚拟环境与缓存
+# Machine-specific opencode config (contains local paths)
+opencode.json
+
+# Python virtual environments and caches
 .venv/
 __pycache__/
 *.py[cod]
@@ -14,16 +17,30 @@ __pycache__/
 .coverage
 coverage.xml
 
-# IDE 与系统文件
+# Build artifacts
+*.egg-info/
+
+# IDE and system files
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
 
-# 本地临时文件
+# Local temporary files
 *.tmp
 *.temp
 *.log
 .tmp-shell/
 .tmp-tests/
 arcgis-mcp-*/
+
+# Assignment files
+analysis_plan.txt
+
+# Planning documents (working copies)
+Build-plan.md
+Extension plan.txt
+Process reference.txt
+
+# Local test data
+test_project/
