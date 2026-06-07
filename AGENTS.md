@@ -41,19 +41,49 @@ inspect_gdb(gdb_path="path/to/data.gdb")
 
 ### 4. (Optional) Real-Time ArcGIS Pro Interaction
 
-If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to interact with the live session:
+If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to interact with the live session. 126 tools are available across 14 phases:
 
-- **Check connectivity:** `pro_ping`
-- **Get active map:** `pro_get_active_map_name`
-- **List layers:** `pro_list_layers`
-- **Count features:** `pro_count_features(layer="Parcels")`
-- **Get layer schema:** `pro_get_layer_schema(layer="Parcels")`
-- **Select features:** `pro_select_by_attribute(layer="Parcels", where="ZONE = 'Residential'")`
-- **Zoom to layer:** `pro_zoom_to_layer(layer="Parcels")`
-- **Get extent:** `pro_get_current_extent()`
-- **Pan to extent:** `pro_pan_to_extent(xmin=500000, ymin=6900000, xmax=510000, ymax=6910000)`
-- **Clear selection:** `pro_clear_selection(layer="Parcels")`
-- **Get selection count:** `pro_get_selection_count(layer="Parcels")`
+**Map & Selection (Base)**
+- `pro_ping`, `pro_get_active_map_name`, `pro_list_layers`
+- `pro_select_by_attribute(layer="Parcels", where="ZONE = 'Residential'")`
+- `pro_zoom_to_layer(layer="Parcels")`, `pro_pan_to_extent(...)`
+- `pro_get_current_extent()`, `pro_count_features(layer="Parcels")`
+
+**Editing (Phase 0, 6)**
+- `pro_split_features(layer, geometry)`, `pro_merge_features(layer, object_ids, target_oid)`
+- `pro_create_point_feature(x, y, attributes?)`
+- `pro_delete_features_by_oid(layer, "1,2,3")`, `pro_update_feature_attributes(layer, oid, attributes)`
+- `pro_undo_edit()`, `pro_redo_edit()`
+
+**Schema Management (Phase 3, 10, 13)**
+- `pro_add_field(layer, field_name, field_type)`, `pro_delete_field(layer, field)`
+- `pro_create_feature_class(gdb_path, name, geometry_type)`
+- `pro_list_domains(gdb_path)`, `pro_create_domain(gdb_path, name, ...)`
+- `pro_assign_domain_to_field(layer, field, domain_name)`
+- `pro_enable_attachments(layer)`
+
+**3D & Visualization (Phase 1, 2, 9)**
+- `pro_get_camera()`, `pro_set_camera(x, y, z)`, `pro_explore_3d(x, y, z, distance)`
+- `pro_set_atmosphere(fog_density)`, `pro_set_sun_position(azimuth, altitude)`
+- `pro_set_layer_elevation(layer, mode, z_offset)`, `pro_set_scene_background(r, g, b)`
+
+**Layout Automation (Phase 8)**
+- `pro_create_layout(name, width, height)`, `pro_create_map(name, map_type)`
+- `pro_add_layout_text(layout, text, x, y)`, `pro_add_layout_legend(layout, map_frame)`
+- `pro_export_layout(layout, path, format)`
+
+**Data Exchange (Phase 11)**
+- `pro_export_to_csv(layer, path)`, `pro_export_to_geo_json(layer, path)`
+- `pro_import_csv(path, layer_name)`, `pro_import_geo_json(path, layer_name)`
+
+**GP & Python (Phase 7, 14)**
+- `pro_run_gp_tool(tool_name, parameters)`, `pro_describe_tool(tool_name)`
+- `pro_set_environment(key, value)`, `pro_get_environment(key?)`
+- `pro_run_python_script(code)`, `pro_get_geoprocessing_history(count?)`
+
+**GUI Automation (Phase 12)**
+- `pro_show_message(message, type)`, `pro_activate_ribbon_tab(tab_id)`
+- `pro_open_dockpane(name)`, `pro_list_dockpanes()`
 
 > The `pro_ping` tool will return `"status": "unavailable"` with setup instructions if the Add-In is not reachable.
 
@@ -70,17 +100,19 @@ If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to intera
 | `buffer_features` | Buffer GP tool | `input_features`, `output_path`, `buffer_distance` |
 | `clip_features` | Clip GP tool | `input_features`, `clip_features`, `output_path` |
 | `execute_arcpy_code` | Run arbitrary ArcPy | `code`, `timeout_seconds` |
-| `pro_ping` | Ping Add-In pipe | None |
-| `pro_get_active_map_name` | Get active map name | None |
-| `pro_list_layers` | List all layers | None |
-| `pro_count_features` | Count features in layer | `layer` |
-| `pro_get_layer_schema` | Get field schema | `layer` |
-| `pro_select_by_attribute` | Select by SQL | `layer`, `where` |
-| `pro_zoom_to_layer` | Zoom to layer extent | `layer` |
-| `pro_get_current_extent` | Get map view extent | None |
-| `pro_pan_to_extent` | Pan to bounding box | `xmin`, `ymin`, `xmax`, `ymax` |
-| `pro_clear_selection` | Clear layer selection | `layer` (optional) |
-| `pro_get_selection_count` | Count selected features | `layer` |
+
+**126 `pro.*` Add-In tools across 14 phases** — see the `README.md` for the full table. Quick reference by category:
+
+| Category | Phase | Example Tools |
+|----------|-------|---------------|
+| Map & Selection | Base | `pro_ping`, `pro_list_layers`, `pro_select_by_attribute`, `pro_zoom_to_layer` |
+| Editing | 0, 6 | `pro_undo_edit`, `pro_split_features`, `pro_create_point_feature`, `pro_merge_features` |
+| Schema | 3, 10, 13 | `pro_add_field`, `pro_create_feature_class`, `pro_list_domains`, `pro_enable_attachments` |
+| 3D & Viz | 1, 2, 9 | `pro_get_camera`, `pro_set_atmosphere`, `pro_explore_3d`, `pro_set_sun_position` |
+| Layouts | 8 | `pro_create_layout`, `pro_add_layout_text`, `pro_export_layout` |
+| Data Exchange | 11 | `pro_export_to_csv`, `pro_import_geo_json`, `pro_export_to_shapefile` |
+| GP & Python | 7, 14 | `pro_run_gp_tool`, `pro_run_python_script`, `pro_set_environment` |
+| GUI Automation | 12 | `pro_show_message`, `pro_activate_ribbon_tab`, `pro_open_dockpane` |
 
 ## Resources
 
@@ -114,6 +146,7 @@ The server also exposes these MCP Resources:
 - `open_current_project=True` will fail with a clear error — always provide an explicit `.aprx` path
 - If Pro is open on the same `.aprx`, write operations will fail with a lock error
 - The `pro.*` tools require the APBridgeAddIn to be installed and ArcGIS Pro to be running
+- `test_project/` is excluded from git — create your own test .aprx and .gdb locally
 
 ### Working with Projects
 
