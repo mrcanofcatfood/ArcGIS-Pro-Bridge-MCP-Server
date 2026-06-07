@@ -2055,9 +2055,7 @@ def pro_count_features_by_expression(layer: str, where: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def pro_split_features(
-    layer: str, cut_geometry: str
-) -> dict[str, Any]:
+def pro_split_features(layer: str, cut_geometry: str) -> dict[str, Any]:
     """Split features intersecting a cutting geometry (GeoJSON polyline/polygon)."""
     return _call_addin(
         "pro.splitFeatures",
@@ -2066,9 +2064,7 @@ def pro_split_features(
 
 
 @mcp.tool()
-def pro_merge_features(
-    layer: str, object_ids: str, target_oid: int
-) -> dict[str, Any]:
+def pro_merge_features(layer: str, object_ids: str, target_oid: int) -> dict[str, Any]:
     """Merge multiple features. object_ids: JSON array of OIDs, target_oid: survivor."""
     return _call_addin(
         "pro.mergeFeatures",
@@ -2077,9 +2073,7 @@ def pro_merge_features(
 
 
 @mcp.tool()
-def pro_run_gp_tool(
-    tool_name: str, parameters: str
-) -> dict[str, Any]:
+def pro_run_gp_tool(tool_name: str, parameters: str) -> dict[str, Any]:
     """Execute an ArcGIS Geoprocessing tool by name. parameters is a JSON array of values."""
     return _call_addin(
         "pro.runGpTool",
@@ -2100,9 +2094,7 @@ def pro_list_gp_tools(
 
 
 @mcp.tool()
-def pro_copy_features(
-    layer: str, output_path: str
-) -> dict[str, Any]:
+def pro_copy_features(layer: str, output_path: str) -> dict[str, Any]:
     """Copy features to a new feature class using the CopyFeatures GP tool."""
     return _call_addin(
         "pro.copyFeatures",
@@ -2111,9 +2103,7 @@ def pro_copy_features(
 
 
 @mcp.tool()
-def pro_rename_layer(
-    layer: str, new_name: str
-) -> dict[str, Any]:
+def pro_rename_layer(layer: str, new_name: str) -> dict[str, Any]:
     """Rename a layer in the current map."""
     return _call_addin(
         "pro.renameLayer",
@@ -2122,9 +2112,7 @@ def pro_rename_layer(
 
 
 @mcp.tool()
-def pro_get_layer_statistics(
-    layer: str, field: str
-) -> dict[str, Any]:
+def pro_get_layer_statistics(layer: str, field: str) -> dict[str, Any]:
     """Compute min, max, mean, stddev, count, and null count for a numeric field."""
     return _call_addin(
         "pro.getLayerStatistics",
@@ -2133,9 +2121,7 @@ def pro_get_layer_statistics(
 
 
 @mcp.tool()
-def pro_project_geometry(
-    x: float, y: float, from_wkid: int, to_wkid: int
-) -> dict[str, Any]:
+def pro_project_geometry(x: float, y: float, from_wkid: int, to_wkid: int) -> dict[str, Any]:
     """Project a point from one spatial reference to another using GeometryEngine."""
     return _call_addin(
         "pro.projectGeometry",
@@ -2162,8 +2148,11 @@ def pro_add_layout_text(
 ) -> dict[str, Any]:
     """Add a text element to a layout."""
     args = {
-        "layoutName": layout_name, "text": text,
-        "x": str(x), "y": str(y), "fontSize": str(font_size),
+        "layoutName": layout_name,
+        "text": text,
+        "x": str(x),
+        "y": str(y),
+        "fontSize": str(font_size),
     }
     if color_rgb:
         args["colorRgb"] = color_rgb
@@ -2290,7 +2279,7 @@ def pro_set_atmosphere(
     horizon_fog: bool = False,
     fog_color: str | None = None,
 ) -> dict[str, Any]:
-    """Set atmospheric effects in a scene (fog density 0-100, optional horizon fog and RGB color)."""
+    """Set atmospheric effects in a scene (fog density 0-100, optional horizon fog and RGB color)."""  # noqa: E501
     args = {"fogDensity": str(fog_density), "horizonFog": str(horizon_fog).lower()}
     if fog_color:
         args["fogColor"] = fog_color
@@ -2326,8 +2315,10 @@ def pro_explore_3d(
 ) -> dict[str, Any]:
     """Orbit/navigate camera to look at a 3D point from a given distance."""
     args = {
-        "x": str(x), "y": str(y),
-        "targetZ": str(target_z), "distance": str(distance),
+        "x": str(x),
+        "y": str(y),
+        "targetZ": str(target_z),
+        "distance": str(distance),
     }
     if heading_delta is not None:
         args["headingDelta"] = str(heading_delta)
@@ -2405,7 +2396,12 @@ def pro_add_attribute_index(
     unique: bool = False,
 ) -> dict[str, Any]:
     """Add an attribute index on a field for faster queries."""
-    args = {"layer": layer, "field": field, "indexName": index_name or f"idx_{field}", "unique": str(unique).lower()}
+    args = {
+        "layer": layer,
+        "field": field,
+        "indexName": index_name or f"idx_{field}",
+        "unique": str(unique).lower(),
+    }  # noqa: E501
     return _call_addin("pro.addAttributeIndex", args)
 
 
@@ -2472,9 +2468,12 @@ def pro_import_csv(
     return _call_addin(
         "pro.importCsv",
         {
-            "csvPath": csv_path, "gdbPath": gdb_path,
-            "fcName": fc_name, "xField": x_field,
-            "yField": y_field, "wkid": str(wkid),
+            "csvPath": csv_path,
+            "gdbPath": gdb_path,
+            "fcName": fc_name,
+            "xField": x_field,
+            "yField": y_field,
+            "wkid": str(wkid),
         },
     )
 
@@ -2601,7 +2600,9 @@ def pro_create_domain(
 ) -> dict[str, Any]:
     """Create a coded-value domain (coded_values as JSON dict) or range domain."""
     args = {
-        "gdbPath": gdb_path, "name": name, "description": description,
+        "gdbPath": gdb_path,
+        "name": name,
+        "description": description,
         "fieldType": field_type,
     }
     if coded_values:

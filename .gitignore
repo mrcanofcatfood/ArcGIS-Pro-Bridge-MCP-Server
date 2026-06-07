@@ -41,3 +41,6 @@ analysis_plan.txt
 Build-plan.md
 Extension plan.txt
 Process reference.txt
+
+# Local test data
+test_project/

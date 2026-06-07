@@ -1853,24 +1853,18 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_select_by_layer_returns_unavailable_when_pipe_unreachable(self) -> None:
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
-            result = server.pro_select_by_layer(
-                target_layer="Buildings", source_layer="Parcels"
-            )
+            result = server.pro_select_by_layer(target_layer="Buildings", source_layer="Parcels")
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_select_by_layer_returns_ok_when_pipe_reachable(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
-            result = server.pro_select_by_layer(
-                target_layer="Buildings", source_layer="Parcels"
-            )
+            result = server.pro_select_by_layer(target_layer="Buildings", source_layer="Parcels")
         self.assertEqual(result["status"], "ok")
 
     def test_pro_select_by_layer_returns_error_on_operation_error(self) -> None:
         err = named_pipe.AddInOperationError("bad op")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
-            result = server.pro_select_by_layer(
-                target_layer="Buildings", source_layer="Parcels"
-            )
+            result = server.pro_select_by_layer(target_layer="Buildings", source_layer="Parcels")
         self.assertEqual(result["status"], "error")
 
     def test_pro_select_by_layer_forwards_correct_op_and_args(self) -> None:
@@ -1940,7 +1934,10 @@ class ProToolsTests(unittest.TestCase):
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_get_features_by_extent(
                 layer="Roads",
-                xmin=0, ymin=0, xmax=1, ymax=1,
+                xmin=0,
+                ymin=0,
+                xmax=1,
+                ymax=1,
                 fields="NAME,TYPE",
             )
         call_args = mock_call.call_args[0][1]
@@ -2045,7 +2042,8 @@ class ProToolsTests(unittest.TestCase):
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_create_point_feature(
                 layer="Trees",
-                x=100, y=200,
+                x=100,
+                y=200,
                 wkid=28356,
                 attributes='{"Species":"Oak"}',
             )
@@ -2131,7 +2129,9 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_get_elevation_sources_ok(self) -> None:
-        with patch("arcgis_mcp_server.call_addin", return_value={"isScene": True, "elevationSources": []}):
+        with patch(
+            "arcgis_mcp_server.call_addin", return_value={"isScene": True, "elevationSources": []}
+        ):  # noqa: E501
             result = server.pro_get_elevation_sources()
         self.assertEqual(result["status"], "ok")
 
@@ -2182,7 +2182,9 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_get_active_tool_ok(self) -> None:
-        with patch("arcgis_mcp_server.call_addin", return_value={"activeTool": "esri_mapping_selectTool"}):
+        with patch(
+            "arcgis_mcp_server.call_addin", return_value={"activeTool": "esri_mapping_selectTool"}
+        ):  # noqa: E501
             result = server.pro_get_active_tool()
         self.assertEqual(result["status"], "ok")
 
@@ -2206,7 +2208,9 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_list_field_values_ok(self) -> None:
-        with patch("arcgis_mcp_server.call_addin", return_value={"field": "ZONE", "distinctCount": 3}):
+        with patch(
+            "arcgis_mcp_server.call_addin", return_value={"field": "ZONE", "distinctCount": 3}
+        ):  # noqa: E501
             result = server.pro_list_field_values(layer="Parcels", field="ZONE")
         self.assertEqual(result["status"], "ok")
 
@@ -2229,12 +2233,16 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_add_field_unavailable(self) -> None:
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
-            result = server.pro_add_field(layer="Parcels", field_name="NEW_FIELD", field_type="Text")
+            result = server.pro_add_field(
+                layer="Parcels", field_name="NEW_FIELD", field_type="Text"
+            )  # noqa: E501
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_add_field_ok(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
-            result = server.pro_add_field(layer="Parcels", field_name="AREA_HA", field_type="Double")
+            result = server.pro_add_field(
+                layer="Parcels", field_name="AREA_HA", field_type="Double"
+            )  # noqa: E501
         self.assertEqual(result["status"], "ok")
 
     def test_pro_add_field_error(self) -> None:
@@ -2245,7 +2253,9 @@ class ProToolsTests(unittest.TestCase):
 
     def test_pro_add_field_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
-            server.pro_add_field(layer="Parcels", field_name="DESCRIPTION", field_type="Text", length=255)
+            server.pro_add_field(
+                layer="Parcels", field_name="DESCRIPTION", field_type="Text", length=255
+            )  # noqa: E501
         mock_call.assert_called_once_with(
             "pro.addField",
             {"layer": "Parcels", "fieldName": "DESCRIPTION", "fieldType": "Text", "length": "255"},
@@ -2253,7 +2263,9 @@ class ProToolsTests(unittest.TestCase):
 
     def test_pro_add_field_forwards_optional_precision_scale(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
-            server.pro_add_field(layer="Parcels", field_name="RATIO", field_type="Double", precision=10, scale=4)
+            server.pro_add_field(
+                layer="Parcels", field_name="RATIO", field_type="Double", precision=10, scale=4
+            )  # noqa: E501
         call_args = mock_call.call_args[0][1]
         self.assertEqual(call_args["precision"], "10")
         self.assertEqual(call_args["scale"], "4")
@@ -2312,9 +2324,7 @@ class ProToolsTests(unittest.TestCase):
 
     def test_pro_create_polygon_feature_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
-            server.pro_create_polygon_feature(
-                layer="Zones", coordinates="0,0 10,0 10,10 0,10 0,0"
-            )
+            server.pro_create_polygon_feature(layer="Zones", coordinates="0,0 10,0 10,10 0,10 0,0")
         mock_call.assert_called_once_with(
             "pro.createPolygonFeature",
             {"layer": "Zones", "coordinates": "0,0 10,0 10,10 0,10 0,0"},
@@ -2323,8 +2333,10 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_create_polygon_feature_forwards_optional_wkid_and_attributes(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_create_polygon_feature(
-                layer="Zones", coordinates="0,0 1,1 2,0 0,0",
-                wkid=28356, attributes='{"Name":"Test"}',
+                layer="Zones",
+                coordinates="0,0 1,1 2,0 0,0",
+                wkid=28356,
+                attributes='{"Name":"Test"}',
             )
         call_args = mock_call.call_args[0][1]
         self.assertEqual(call_args["wkid"], "28356")
@@ -2360,8 +2372,10 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_create_line_feature_forwards_optional_wkid_and_attributes(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_create_line_feature(
-                layer="Roads", coordinates="0,0 1,1",
-                wkid=28356, attributes='{"Type":"Highway"}',
+                layer="Roads",
+                coordinates="0,0 1,1",
+                wkid=28356,
+                attributes='{"Type":"Highway"}',
             )
         call_args = mock_call.call_args[0][1]
         self.assertEqual(call_args["wkid"], "28356")
@@ -2483,7 +2497,9 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_set_snapping_ok(self) -> None:
-        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "snappingEnabled": True}):
+        with patch(
+            "arcgis_mcp_server.call_addin", return_value={"done": True, "snappingEnabled": True}
+        ):  # noqa: E501
             result = server.pro_set_snapping(enabled=True)
         self.assertEqual(result["status"], "ok")
 
@@ -2693,7 +2709,10 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_get_time_extent_ok(self) -> None:
-        with patch("arcgis_mcp_server.call_addin", return_value={"hasTimeExtent": True, "start": "2020", "end": "2025"}):
+        with patch(
+            "arcgis_mcp_server.call_addin",
+            return_value={"hasTimeExtent": True, "start": "2020", "end": "2025"},
+        ):  # noqa: E501
             result = server.pro_get_time_extent()
         self.assertEqual(result["status"], "ok")
 
@@ -2744,7 +2763,10 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_list_layout_elements_ok(self) -> None:
-        with patch("arcgis_mcp_server.call_addin", return_value={"layoutName": "Layout1", "elementCount": 3}):
+        with patch(
+            "arcgis_mcp_server.call_addin",
+            return_value={"layoutName": "Layout1", "elementCount": 3},
+        ):  # noqa: E501
             result = server.pro_list_layout_elements(layout_name="Layout1")
         self.assertEqual(result["status"], "ok")
 
@@ -2798,7 +2820,9 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_get_layer_description_ok(self) -> None:
-        with patch("arcgis_mcp_server.call_addin", return_value={"description": "Parcel boundaries"}):
+        with patch(
+            "arcgis_mcp_server.call_addin", return_value={"description": "Parcel boundaries"}
+        ):  # noqa: E501
             result = server.pro_get_layer_description(layer="Parcels")
         self.assertEqual(result["status"], "ok")
 
@@ -3134,13 +3158,23 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_add_layout_text_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_add_layout_text(
-                layout_name="Layout1", text="Hello World", x=10, y=20,
-                font_size=14, color_rgb="255,0,0",
+                layout_name="Layout1",
+                text="Hello World",
+                x=10,
+                y=20,
+                font_size=14,
+                color_rgb="255,0,0",
             )
         mock_call.assert_called_once_with(
             "pro.addLayoutText",
-            {"layoutName": "Layout1", "text": "Hello World", "x": "10", "y": "20",
-             "fontSize": "14", "colorRgb": "255,0,0"},
+            {
+                "layoutName": "Layout1",
+                "text": "Hello World",
+                "x": "10",
+                "y": "20",
+                "fontSize": "14",
+                "colorRgb": "255,0,0",
+            },
         )
 
     def test_pro_add_layout_text_forwards_defaults(self) -> None:
@@ -3155,14 +3189,24 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_add_layout_picture(
-                layout_name="L", image_path="C:\\img.png", x=0, y=0, width=100, height=50,
+                layout_name="L",
+                image_path="C:\\img.png",
+                x=0,
+                y=0,
+                width=100,
+                height=50,
             )
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_add_layout_picture_ok(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
             result = server.pro_add_layout_picture(
-                layout_name="L", image_path="C:\\img.png", x=0, y=0, width=100, height=50,
+                layout_name="L",
+                image_path="C:\\img.png",
+                x=0,
+                y=0,
+                width=100,
+                height=50,
             )
         self.assertEqual(result["status"], "ok")
 
@@ -3170,7 +3214,12 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInOperationError("bad op")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_add_layout_picture(
-                layout_name="L", image_path="C:\\img.png", x=0, y=0, width=100, height=50,
+                layout_name="L",
+                image_path="C:\\img.png",
+                x=0,
+                y=0,
+                width=100,
+                height=50,
             )
         self.assertEqual(result["status"], "error")
 
@@ -3179,12 +3228,21 @@ class ProToolsTests(unittest.TestCase):
             server.pro_add_layout_picture(
                 layout_name="MyLayout",
                 image_path="D:\\photo.jpg",
-                x=50, y=100, width=200, height=150,
+                x=50,
+                y=100,
+                width=200,
+                height=150,
             )
         mock_call.assert_called_once_with(
             "pro.addLayoutPicture",
-            {"layoutName": "MyLayout", "imagePath": "D:\\photo.jpg",
-             "x": "50", "y": "100", "width": "200", "height": "150"},
+            {
+                "layoutName": "MyLayout",
+                "imagePath": "D:\\photo.jpg",
+                "x": "50",
+                "y": "100",
+                "width": "200",
+                "height": "150",
+            },
         )
 
     def test_pro_add_layout_legend_unavailable(self) -> None:
@@ -3207,7 +3265,10 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_add_layout_legend_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_add_layout_legend(
-                layout_name="Layout1", x=5, y=5, map_frame_name="MapFrame1",
+                layout_name="Layout1",
+                x=5,
+                y=5,
+                map_frame_name="MapFrame1",
             )
         mock_call.assert_called_once_with(
             "pro.addLayoutLegend",
@@ -3226,14 +3287,20 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_add_layout_north_arrow(
-                layout_name="L", map_frame_name="MF1", x=10, y=20,
+                layout_name="L",
+                map_frame_name="MF1",
+                x=10,
+                y=20,
             )
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_add_layout_north_arrow_ok(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
             result = server.pro_add_layout_north_arrow(
-                layout_name="L", map_frame_name="MF1", x=10, y=20,
+                layout_name="L",
+                map_frame_name="MF1",
+                x=10,
+                y=20,
             )
         self.assertEqual(result["status"], "ok")
 
@@ -3241,14 +3308,20 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInOperationError("bad op")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_add_layout_north_arrow(
-                layout_name="L", map_frame_name="MF1", x=10, y=20,
+                layout_name="L",
+                map_frame_name="MF1",
+                x=10,
+                y=20,
             )
         self.assertEqual(result["status"], "error")
 
     def test_pro_add_layout_north_arrow_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_add_layout_north_arrow(
-                layout_name="MyLayout", map_frame_name="MapFrame1", x=15, y=25,
+                layout_name="MyLayout",
+                map_frame_name="MapFrame1",
+                x=15,
+                y=25,
             )
         mock_call.assert_called_once_with(
             "pro.addLayoutNorthArrow",
@@ -3473,13 +3546,23 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_explore_3d_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_explore_3d(
-                x=500000, y=6900000, target_z=200,
-                distance=1000, heading_delta=45, pitch_delta=-10,
+                x=500000,
+                y=6900000,
+                target_z=200,
+                distance=1000,
+                heading_delta=45,
+                pitch_delta=-10,
             )
         mock_call.assert_called_once_with(
             "pro.explore3D",
-            {"x": "500000", "y": "6900000", "targetZ": "200",
-             "distance": "1000", "headingDelta": "45", "pitchDelta": "-10"},
+            {
+                "x": "500000",
+                "y": "6900000",
+                "targetZ": "200",
+                "distance": "1000",
+                "headingDelta": "45",
+                "pitchDelta": "-10",
+            },
         )
 
     def test_pro_explore_3d_forwards_without_deltas(self) -> None:
@@ -3494,14 +3577,18 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_set_layer_elevation(
-                layer="Parcels", elevation_mode="absolute", z_offset=50,
+                layer="Parcels",
+                elevation_mode="absolute",
+                z_offset=50,
             )
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_set_layer_elevation_ok(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
             result = server.pro_set_layer_elevation(
-                layer="Parcels", elevation_mode="relative", z_offset=10,
+                layer="Parcels",
+                elevation_mode="relative",
+                z_offset=10,
             )
         self.assertEqual(result["status"], "ok")
 
@@ -3509,14 +3596,18 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInOperationError("bad op")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_set_layer_elevation(
-                layer="Parcels", elevation_mode="dra", z_offset=0,
+                layer="Parcels",
+                elevation_mode="dra",
+                z_offset=0,
             )
         self.assertEqual(result["status"], "error")
 
     def test_pro_set_layer_elevation_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_set_layer_elevation(
-                layer="Buildings", elevation_mode="absolute", z_offset=100,
+                layer="Buildings",
+                elevation_mode="absolute",
+                z_offset=100,
             )
         mock_call.assert_called_once_with(
             "pro.setLayerElevation",
@@ -3562,14 +3653,18 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_create_feature_class(
-                gdb_path="C:\\data.gdb", name="NewFC", geometry_type="Polygon",
+                gdb_path="C:\\data.gdb",
+                name="NewFC",
+                geometry_type="Polygon",
             )
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_create_feature_class_ok(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
             result = server.pro_create_feature_class(
-                gdb_path="C:\\data.gdb", name="Points", geometry_type="Point",
+                gdb_path="C:\\data.gdb",
+                name="Points",
+                geometry_type="Point",
             )
         self.assertEqual(result["status"], "ok")
 
@@ -3577,26 +3672,38 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInOperationError("bad op")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_create_feature_class(
-                gdb_path="C:\\data.gdb", name="BadFC", geometry_type="Polyline",
+                gdb_path="C:\\data.gdb",
+                name="BadFC",
+                geometry_type="Polyline",
             )
         self.assertEqual(result["status"], "error")
 
     def test_pro_create_feature_class_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_create_feature_class(
-                gdb_path="C:\\proj.gdb", name="Roads", geometry_type="Polyline",
-                wkid=28356, fields_json='[{"fieldName":"Name","fieldType":"TEXT"}]',
+                gdb_path="C:\\proj.gdb",
+                name="Roads",
+                geometry_type="Polyline",
+                wkid=28356,
+                fields_json='[{"fieldName":"Name","fieldType":"TEXT"}]',
             )
         mock_call.assert_called_once_with(
             "pro.createFeatureClass",
-            {"gdbPath": "C:\\proj.gdb", "name": "Roads", "geometryType": "Polyline",
-             "wkid": "28356", "fieldsJson": '[{"fieldName":"Name","fieldType":"TEXT"}]'},
+            {
+                "gdbPath": "C:\\proj.gdb",
+                "name": "Roads",
+                "geometryType": "Polyline",
+                "wkid": "28356",
+                "fieldsJson": '[{"fieldName":"Name","fieldType":"TEXT"}]',
+            },
         )
 
     def test_pro_create_feature_class_forwards_minimal(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_create_feature_class(
-                gdb_path="C:\\data.gdb", name="FC", geometry_type="Point",
+                gdb_path="C:\\data.gdb",
+                name="FC",
+                geometry_type="Point",
             )
         mock_call.assert_called_once_with(
             "pro.createFeatureClass",
@@ -3670,12 +3777,19 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_add_attribute_index_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_add_attribute_index(
-                layer="Roads", field="ROAD_NAME", index_name="idx_road_name", unique=True,
+                layer="Roads",
+                field="ROAD_NAME",
+                index_name="idx_road_name",
+                unique=True,
             )
         mock_call.assert_called_once_with(
             "pro.addAttributeIndex",
-            {"layer": "Roads", "field": "ROAD_NAME",
-             "indexName": "idx_road_name", "unique": "true"},
+            {
+                "layer": "Roads",
+                "field": "ROAD_NAME",
+                "indexName": "idx_road_name",
+                "unique": "true",
+            },
         )
 
     def test_pro_search_address_unavailable(self) -> None:
@@ -3784,16 +3898,22 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_import_csv(
-                csv_path="C:\\data.csv", gdb_path="C:\\proj.gdb",
-                fc_name="Points", x_field="X", y_field="Y",
+                csv_path="C:\\data.csv",
+                gdb_path="C:\\proj.gdb",
+                fc_name="Points",
+                x_field="X",
+                y_field="Y",
             )
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_import_csv_ok(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"rowCount": 50}):
             result = server.pro_import_csv(
-                csv_path="C:\\data.csv", gdb_path="C:\\proj.gdb",
-                fc_name="Points", x_field="Lon", y_field="Lat",
+                csv_path="C:\\data.csv",
+                gdb_path="C:\\proj.gdb",
+                fc_name="Points",
+                x_field="Lon",
+                y_field="Lat",
             )
         self.assertEqual(result["status"], "ok")
 
@@ -3801,23 +3921,34 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInOperationError("bad op")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_import_csv(
-                csv_path="C:\\data.csv", gdb_path="C:\\proj.gdb",
-                fc_name="Points", x_field="X", y_field="Y",
+                csv_path="C:\\data.csv",
+                gdb_path="C:\\proj.gdb",
+                fc_name="Points",
+                x_field="X",
+                y_field="Y",
             )
         self.assertEqual(result["status"], "error")
 
     def test_pro_import_csv_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_import_csv(
-                csv_path="D\\survey.csv", gdb_path="C:\\proj.gdb",
-                fc_name="SurveyPts", x_field="Easting", y_field="Northing",
+                csv_path="D\\survey.csv",
+                gdb_path="C:\\proj.gdb",
+                fc_name="SurveyPts",
+                x_field="Easting",
+                y_field="Northing",
                 wkid=28356,
             )
         mock_call.assert_called_once_with(
             "pro.importCsv",
-            {"csvPath": "D\\survey.csv", "gdbPath": "C:\\proj.gdb",
-             "fcName": "SurveyPts", "xField": "Easting",
-             "yField": "Northing", "wkid": "28356"},
+            {
+                "csvPath": "D\\survey.csv",
+                "gdbPath": "C:\\proj.gdb",
+                "fcName": "SurveyPts",
+                "xField": "Easting",
+                "yField": "Northing",
+                "wkid": "28356",
+            },
         )
 
     def test_pro_export_to_shapefile_unavailable(self) -> None:
@@ -3874,14 +4005,18 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInNotAvailableError("Not found")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_import_geo_json(
-                geojson_path="C:\\data.geojson", gdb_path="C:\\proj.gdb", fc_name="Imported",
+                geojson_path="C:\\data.geojson",
+                gdb_path="C:\\proj.gdb",
+                fc_name="Imported",
             )
         self.assertEqual(result["status"], "unavailable")
 
     def test_pro_import_geo_json_ok(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={"rowCount": 25}):
             result = server.pro_import_geo_json(
-                geojson_path="C:\\data.geojson", gdb_path="C:\\proj.gdb", fc_name="Imported",
+                geojson_path="C:\\data.geojson",
+                gdb_path="C:\\proj.gdb",
+                fc_name="Imported",
             )
         self.assertEqual(result["status"], "ok")
 
@@ -3889,19 +4024,26 @@ class ProToolsTests(unittest.TestCase):
         err = named_pipe.AddInOperationError("bad op")
         with patch("arcgis_mcp_server.call_addin", side_effect=err):
             result = server.pro_import_geo_json(
-                geojson_path="C:\\data.geojson", gdb_path="C:\\proj.gdb", fc_name="Imported",
+                geojson_path="C:\\data.geojson",
+                gdb_path="C:\\proj.gdb",
+                fc_name="Imported",
             )
         self.assertEqual(result["status"], "error")
 
     def test_pro_import_geo_json_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin") as mock_call:
             server.pro_import_geo_json(
-                geojson_path="D:\\buildings.geojson", gdb_path="C:\\proj.gdb", fc_name="Buildings",
+                geojson_path="D:\\buildings.geojson",
+                gdb_path="C:\\proj.gdb",
+                fc_name="Buildings",
             )
         mock_call.assert_called_once_with(
             "pro.importGeoJSON",
-            {"geojsonPath": "D:\\buildings.geojson",
-             "gdbPath": "C:\\proj.gdb", "fcName": "Buildings"},
+            {
+                "geojsonPath": "D:\\buildings.geojson",
+                "gdbPath": "C:\\proj.gdb",
+                "fcName": "Buildings",
+            },
         )
 
     # --- Phase 12: Pro GUI Automation ---
@@ -4060,58 +4202,78 @@ class ProToolsTests(unittest.TestCase):
 
     def test_pro_create_domain_unavailable(self) -> None:
         result = server.pro_create_domain(
-            gdb_path=r"C:\data\test.gdb", name="ZoneType",
-            description="Zone type codes", field_type="String",
-            coded_values='{"R":"Residential","C":"Commercial"}')
+            gdb_path=r"C:\data\test.gdb",
+            name="ZoneType",
+            description="Zone type codes",
+            field_type="String",
+            coded_values='{"R":"Residential","C":"Commercial"}',
+        )
         assert result["status"] == "unavailable"
 
     def test_pro_create_domain_ok(self) -> None:
         result = server.pro_create_domain(
-            gdb_path=r"C:\data\test.gdb", name="ZoneType",
-            description="Zone type codes", field_type="String",
-            coded_values='{"R":"Residential","C":"Commercial"}')
+            gdb_path=r"C:\data\test.gdb",
+            name="ZoneType",
+            description="Zone type codes",
+            field_type="String",
+            coded_values='{"R":"Residential","C":"Commercial"}',
+        )
         assert isinstance(result, dict)
 
     def test_pro_create_domain_error(self) -> None:
         result = server.pro_create_domain(
-            gdb_path=r"C:\data\test.gdb", name="ZoneType",
-            description="Zone type codes", field_type="String",
-            coded_values='{"R":"Residential","C":"Commercial"}')
+            gdb_path=r"C:\data\test.gdb",
+            name="ZoneType",
+            description="Zone type codes",
+            field_type="String",
+            coded_values='{"R":"Residential","C":"Commercial"}',
+        )
         assert isinstance(result, dict)
 
     def test_pro_create_domain_forwards_op_and_args(self) -> None:
         cv_json = '{"R":"Residential","C":"Commercial"}'
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
             server.pro_create_domain(
-                gdb_path=r"C:\data\test.gdb", name="ZoneType",
-                description="Zone type codes", field_type="String",
-                coded_values=cv_json)
+                gdb_path=r"C:\data\test.gdb",
+                name="ZoneType",
+                description="Zone type codes",
+                field_type="String",
+                coded_values=cv_json,
+            )
         mock_call.assert_called_once_with(
             "pro.createDomain",
-            {"gdbPath": r"C:\data\test.gdb", "name": "ZoneType",
-             "description": "Zone type codes", "fieldType": "String",
-             "codedValues": cv_json},
+            {
+                "gdbPath": r"C:\data\test.gdb",
+                "name": "ZoneType",
+                "description": "Zone type codes",
+                "fieldType": "String",
+                "codedValues": cv_json,
+            },
         )
 
     def test_pro_assign_domain_to_field_unavailable(self) -> None:
         result = server.pro_assign_domain_to_field(
-            layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+            layer="Parcels", field="ZoneCode", domain_name="ZoneType"
+        )
         assert result["status"] == "unavailable"
 
     def test_pro_assign_domain_to_field_ok(self) -> None:
         result = server.pro_assign_domain_to_field(
-            layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+            layer="Parcels", field="ZoneCode", domain_name="ZoneType"
+        )
         assert isinstance(result, dict)
 
     def test_pro_assign_domain_to_field_error(self) -> None:
         result = server.pro_assign_domain_to_field(
-            layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+            layer="Parcels", field="ZoneCode", domain_name="ZoneType"
+        )
         assert isinstance(result, dict)
 
     def test_pro_assign_domain_to_field_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
             server.pro_assign_domain_to_field(
-                layer="Parcels", field="ZoneCode", domain_name="ZoneType")
+                layer="Parcels", field="ZoneCode", domain_name="ZoneType"
+            )
         mock_call.assert_called_once_with(
             "pro.assignDomainToField",
             {"layer": "Parcels", "field": "ZoneCode", "domainName": "ZoneType"},
@@ -4195,7 +4357,8 @@ class ProToolsTests(unittest.TestCase):
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
             server.pro_list_toolboxes()
         mock_call.assert_called_once_with(
-            "pro.listToolboxes", {},
+            "pro.listToolboxes",
+            {},
         )
 
     def test_pro_describe_tool_unavailable(self) -> None:
@@ -4214,7 +4377,8 @@ class ProToolsTests(unittest.TestCase):
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
             server.pro_describe_tool(tool_name="Buffer_analysis")
         mock_call.assert_called_once_with(
-            "pro.describeTool", {"toolName": "Buffer_analysis"},
+            "pro.describeTool",
+            {"toolName": "Buffer_analysis"},
         )
 
     def test_pro_get_geoprocessing_history_unavailable(self) -> None:
@@ -4233,7 +4397,8 @@ class ProToolsTests(unittest.TestCase):
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
             server.pro_get_geoprocessing_history(count=10)
         mock_call.assert_called_once_with(
-            "pro.getGeoprocessingHistory", {"count": "10"},
+            "pro.getGeoprocessingHistory",
+            {"count": "10"},
         )
 
     def test_pro_run_python_script_unavailable(self) -> None:
@@ -4294,14 +4459,16 @@ class ProToolsTests(unittest.TestCase):
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
             server.pro_get_environment(key="workspace")
         mock_call.assert_called_once_with(
-            "pro.getEnvironment", {"key": "workspace"},
+            "pro.getEnvironment",
+            {"key": "workspace"},
         )
 
     def test_pro_get_environment_forwards_op_and_args_no_key(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
             server.pro_get_environment()
         mock_call.assert_called_once_with(
-            "pro.getEnvironment", {},
+            "pro.getEnvironment",
+            {},
         )
 
 

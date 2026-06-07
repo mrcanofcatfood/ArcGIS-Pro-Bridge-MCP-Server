@@ -53,25 +53,32 @@ This approach was inspired by [nicogis/MCP-Server-ArcGIS-Pro-AddIn](https://gith
 Key features integrated:
 - Named Pipe IPC for in-process communication
 - `MapView.Active` access for real-time map state
-- 10 tools covering map, layer, selection, and extent operations
+- 126 tools covering map, layer, selection, editing, layout, 3D, data management, import/export, GUI automation, schema management, and advanced geoprocessing
 
 ---
 
 ## Implemented Tools
 
-| Tool | Description |
-|------|-------------|
-| `pro_ping` | Ping Add-In pipe connectivity |
-| `pro_get_active_map_name` | Get name of active map |
-| `pro_list_layers` | List all layers with visibility and type |
-| `pro_count_features` | Count features in a layer |
-| `pro_get_layer_schema` | Get field schema of a layer |
-| `pro_get_selection_count` | Count selected features |
-| `pro_select_by_attribute` | Select features by SQL |
-| `pro_clear_selection` | Clear selection on layer or all |
-| `pro_zoom_to_layer` | Zoom to layer extent |
-| `pro_get_current_extent` | Get current map extent |
-| `pro_pan_to_extent` | Pan to bounding box |
+126 `pro.*` tools across 14 phases — see `README.md` for the full table.
+
+| Phase | Tools | Category |
+|-------|-------|----------|
+| Base | 11 | Map query, selection, extent |
+| 0 | 10 | Camera, layer properties, selection operations |
+| 1 | 8 | Rendering, layer management, layout query |
+| 2 | 8 | 3D detection, transparency, bookmarks, time |
+| 3 | 8 | Field CRUD, attachments |
+| 4 | 10 | Snapping, bookmarks, time, layout export |
+| 5 | 10 | Descriptions, standalone tables, relates |
+| 6 | 10 | Spatial selection, feature CRUD, renderers |
+| 7 | 8 | Split/merge, GP execution, statistics, projection |
+| 8 | 8 | Layout text/pictures/legends, map creation |
+| 9 | 6 | Atmosphere, sun, elevation, 3D camera |
+| 10 | 6 | Feature class CRUD, save, indexes, address search |
+| 11 | 6 | CSV, GeoJSON, shapefile, KML exchange |
+| 12 | 6 | Message dialogs, progress bar, dockpanes, ribbon |
+| 13 | 6 | Domains, subtypes, attachments |
+| 14 | 6 | Toolbox browsing, Python execution, GP history, environments |
 
 ---
 
