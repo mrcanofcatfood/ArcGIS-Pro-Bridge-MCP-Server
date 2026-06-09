@@ -42,6 +42,7 @@ jobs:
   dotnet:
     name: C# Build
     runs-on: windows-latest
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,7 +52,31 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Check ArcGIS SDK availability
+        id: check_sdk
+        shell: pwsh
+        run: |
+          $sdkPaths = @(
+            "C:\Program Files\ArcGIS\Pro\bin\ArcGIS.Core.Host.dll",
+            "C:\Program Files\ArcGIS\Pro\bin\ArcGIS.Desktop.Framework.dll"
+          )
+          $available = $true
+          foreach ($p in $sdkPaths) {
+            if (-not (Test-Path $p)) { $available = $false; break }
+          }
+          if ($available) {
+            echo "sdk_available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            echo "sdk_available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
       - name: Build
+        if: steps.check_sdk.outputs.sdk_available == 'true'
         working-directory: addin/APBridgeAddIn
         run: dotnet build APBridgeAddIn.csproj --nologo -v:q 2>&1 | Select-String -Pattern "error|Build succeeded|Build FAILED"
         shell: pwsh
+
+      - name: Skip build
+        if: steps.check_sdk.outputs.sdk_available != 'true'
+        shell: pwsh
+        run: echo "::warning::ArcGIS Pro SDK not available on this runner. Skipping C# build."

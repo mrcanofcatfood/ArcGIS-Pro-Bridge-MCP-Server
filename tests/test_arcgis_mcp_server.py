@@ -2523,6 +2523,81 @@ class ProToolsTests(unittest.TestCase):
             {"enabled": "true"},
         )
 
+    # --- pro.listBookmarks ---
+
+    def test_pro_list_bookmarks_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_bookmarks()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_list_bookmarks_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value=[]):
+            result = server.pro_list_bookmarks()
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_list_bookmarks_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_bookmarks()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_list_bookmarks_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_list_bookmarks()
+        mock_call.assert_called_once_with("pro.listBookmarks", {})
+
+    # --- pro.zoomToBookmark ---
+
+    def test_pro_zoom_to_bookmark_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_zoom_to_bookmark(name="ZoomTarget")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_zoom_to_bookmark_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_zoom_to_bookmark(name="ZoomTarget")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_zoom_to_bookmark_error(self) -> None:
+        err = named_pipe.AddInOperationError("bookmark not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_zoom_to_bookmark(name="ZoomTarget")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_zoom_to_bookmark_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_zoom_to_bookmark(name="ZoomTarget")
+        mock_call.assert_called_once_with("pro.zoomToBookmark", {"name": "ZoomTarget"})
+
+    # --- pro.createBookmark ---
+
+    def test_pro_create_bookmark_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_bookmark(name="NewBM")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_create_bookmark_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_create_bookmark(name="NewBM")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_bookmark_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_bookmark(name="NewBM")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_create_bookmark_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_create_bookmark(name="My Bookmark")
+        mock_call.assert_called_once_with(
+            "pro.createBookmark",
+            {"name": "My Bookmark"},
+        )
+
     # --- Phase 5: pro_delete_bookmark ---
 
     def test_pro_delete_bookmark_unavailable(self) -> None:

@@ -2744,6 +2744,12 @@ def pro_zoom_to_bookmark(name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def pro_create_bookmark(name: str) -> dict[str, Any]:
+    """Create a new bookmark in the active map (not accessible from AddIn SDK)."""
+    return _call_addin("pro.createBookmark", {"name": name})
+
+
+@mcp.tool()
 def pro_reorder_layer(layer: str, index: int) -> dict[str, Any]:
     """Move a layer to the specified index in the table of contents."""
     return _call_addin("pro.reorderLayer", {"layer": layer, "index": str(index)})

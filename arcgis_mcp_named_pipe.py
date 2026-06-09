@@ -78,6 +78,7 @@ def _open_pipe(timeout: float = CONNECT_TIMEOUT_SECONDS):
         )
     deadline = time.monotonic() + timeout
     last_error: str | None = None
+    attempt = 0
     while time.monotonic() < deadline:
         try:
             handle = win32file.CreateFile(
@@ -100,7 +101,9 @@ def _open_pipe(timeout: float = CONNECT_TIMEOUT_SECONDS):
             last_error = str(exc)
             winerror = exc.args[0] if exc.args else 0
             if winerror in (2, 231):  # ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY
-                time.sleep(0.1)
+                attempt += 1
+                delay = min(0.05 * (2 ** attempt), 1.0)  # exponential backoff: 100ms, 200ms, 400ms, 800ms, cap at 1s
+                time.sleep(delay)
                 continue
             raise AddInNotAvailableError(f"Failed to connect to Add-In pipe: {exc}") from exc
     raise AddInNotAvailableError(

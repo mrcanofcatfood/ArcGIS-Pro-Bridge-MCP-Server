@@ -44,3 +44,10 @@ Process reference.txt
 
 # Local test data
 test_project/
+
+# OpenCode node_modules
+.opencode/node_modules/
+
+# Generated report files
+live_test_report.json
+temp_test_*
