@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build Add-In
+        working-directory: addin/APBridgeAddIn
+        run: dotnet build APBridgeAddIn.csproj --configuration Release --nologo -v:q 2>&1 | Select-String -Pattern "error|Build succeeded"
+        shell: pwsh
+
+      - name: Package Add-In
+        working-directory: addin/APBridgeAddIn
+        run: |
+          $projDir = "$PWD"
+          $outDir = "$projDir\bin\Release\net8.0-windows8.0"
+          $tempDir = "$projDir\obj\esri_package"
+          $esriAddinX = "$outDir\APBridgeAddIn.esriAddinX"
+
+          if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }
+          New-Item -ItemType Directory -Path "$tempDir\Install" -Force | Out-Null
+          Copy-Item "$projDir\Config.daml" "$tempDir\Config.daml"
+          Copy-Item "$outDir\APBridgeAddIn.dll" "$tempDir\Install\APBridgeAddIn.dll"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $esriAddinX)
+          Remove-Item -Recurse -Force $tempDir
+          Write-Output "Packaged: $esriAddinX"
+        shell: pwsh
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: |
+            addin/APBridgeAddIn/bin/Release/net8.0-windows8.0/APBridgeAddIn.esriAddinX
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

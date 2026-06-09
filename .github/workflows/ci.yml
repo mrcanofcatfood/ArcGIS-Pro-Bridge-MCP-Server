@@ -8,7 +8,8 @@ on:
   pull_request:
 
 jobs:
-  test:
+  python:
+    name: Python ${{ matrix.python-version }}
     runs-on: windows-latest
     strategy:
       matrix:
@@ -27,7 +28,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --dev
 
       - name: Ruff check
         run: uv run ruff check .
@@ -36,4 +37,21 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Unit tests
-        run: uv run python -m unittest discover -s tests -p "test_*.py"
+        run: uv run python -m pytest tests/ -q --tb=short
+
+  dotnet:
+    name: C# Build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build
+        working-directory: addin/APBridgeAddIn
+        run: dotnet build APBridgeAddIn.csproj --nologo -v:q 2>&1 | Select-String -Pattern "error|Build succeeded|Build FAILED"
+        shell: pwsh
