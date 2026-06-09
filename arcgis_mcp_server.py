@@ -2731,6 +2731,72 @@ def pro_get_environment(
     return _call_addin("pro.getEnvironment", args)
 
 
+@mcp.tool()
+def pro_list_bookmarks() -> dict[str, Any]:
+    """List bookmarks in the active map."""
+    return _call_addin("pro.listBookmarks", {})
+
+
+@mcp.tool()
+def pro_zoom_to_bookmark(name: str) -> dict[str, Any]:
+    """Zoom the active map view to a named bookmark."""
+    return _call_addin("pro.zoomToBookmark", {"name": name})
+
+
+@mcp.tool()
+def pro_reorder_layer(layer: str, index: int) -> dict[str, Any]:
+    """Move a layer to the specified index in the table of contents."""
+    return _call_addin("pro.reorderLayer", {"layer": layer, "index": str(index)})
+
+
+@mcp.tool()
+def pro_set_labels_enabled(layer: str, enabled: bool) -> dict[str, Any]:
+    """Enable or disable labels on a feature layer."""
+    return _call_addin("pro.setLabelsEnabled", {"layer": layer, "enabled": str(enabled)})
+
+
+@mcp.tool()
+def pro_open_dockpane(dockpane_id: str) -> dict[str, Any]:
+    """Open a dockpane by DAML ID or friendly name (Contents, Catalog, Geoprocessing, etc.)."""
+    return _call_addin("pro.openDockpane", {"dockpaneId": dockpane_id})
+
+
+@mcp.tool()
+def pro_export_layout_to_file(
+    layout_name: str,
+    output_path: str,
+    format: str | None = None,
+    dpi: int | None = None,
+) -> dict[str, Any]:
+    """Export a layout to PDF or PNG file."""
+    args: dict[str, str] = {"layoutName": layout_name, "outputPath": output_path}
+    if format:
+        args["format"] = format
+    if dpi:
+        args["dpi"] = str(dpi)
+    return _call_addin("pro.exportLayoutToFile", args)
+
+
+@mcp.tool()
+def pro_fly_to_location(
+    x: float,
+    y: float,
+    z: float,
+    heading: float | None = None,
+    pitch: float | None = None,
+    duration_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Fly the camera to a 3D location (x, y, z) in a scene view."""
+    args: dict[str, str] = {"x": str(x), "y": str(y), "z": str(z)}
+    if heading is not None:
+        args["heading"] = str(heading)
+    if pitch is not None:
+        args["pitch"] = str(pitch)
+    if duration_seconds is not None:
+        args["durationSeconds"] = str(duration_seconds)
+    return _call_addin("pro.flyToLocation", args)
+
+
 def main() -> None:
     """Server startup entry point."""
     if sys.platform != "win32":

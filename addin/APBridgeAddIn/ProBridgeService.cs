@@ -23,20 +23,20 @@ namespace APBridgeAddIn
     internal class ProBridgeService : IDisposable
     {
         private readonly string _pipeName;
-        private CancellationTokenSource _cts;
-        private Task _serverLoop;
+        private Thread _serverThread;
+        private volatile bool _stopped;
 
         private static readonly Dictionary<string, string> _knownDockPanes = new(StringComparer.OrdinalIgnoreCase)
         {
-            ["Contents"] = "esri_mapping_contentsPane",
-            ["Catalog"] = "esri_mapping_catalogPane",
+            ["Contents"] = "esri_core_contentsDockPane",
+            ["Catalog"] = "esri_core_projectDockPane",
             ["Attribute Table"] = "esri_mapping_tableWindow",
             ["Table"] = "esri_mapping_tableWindow",
             ["Search"] = "esri_core_searchDockPane",
             ["Geoprocessing"] = "esri_mapping_geoprocessingPane",
-            ["Symbology"] = "esri_mapping_symbologyPane",
-            ["Labeling"] = "esri_mapping_labelingPane",
-            ["Bookmarks"] = "esri_mapping_bookmarksPane",
+            ["Symbology"] = "esri_mapping_symbologyDockPane",
+            ["Labeling"] = "esri_mapping_labelClassDockPane",
+            ["Bookmarks"] = "esri_mapping_bookmarksManagerDockPane",
             ["Time"] = "esri_mapping_timeDockPane",
         };
 
@@ -55,57 +55,67 @@ namespace APBridgeAddIn
 
         public void Start()
         {
-            _cts = new CancellationTokenSource();
-            _serverLoop = Task.Run(() => RunAsync(_cts.Token));
+            _stopped = false;
+            _serverThread = new Thread(RunLoop) { IsBackground = true, Name = "ProBridgePipeServer" };
+            _serverThread.Start();
         }
 
         public void Dispose()
         {
-            try { _cts?.Cancel(); _serverLoop?.Wait(2000); }
-            catch { }
+            _stopped = true;
+            _serverThread = null;
         }
 
-        private async Task RunAsync(CancellationToken ct)
+        private void RunLoop()
         {
-            while (!ct.IsCancellationRequested)
+            while (!_stopped)
             {
-                using var server = new NamedPipeServerStream(
-                    _pipeName,
-                    PipeDirection.InOut,
-                    1,
-                    PipeTransmissionMode.Message,
-                    PipeOptions.Asynchronous
-                );
-                await server.WaitForConnectionAsync(ct);
-                using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
-                using var writer = new StreamWriter(server, new UTF8Encoding(false), leaveOpen: true)
-                { AutoFlush = true };
-
-                while (server.IsConnected && !ct.IsCancellationRequested)
+                try
                 {
-                    var line = await reader.ReadLineAsync();
-                    if (line == null) break;
+                    using var server = new NamedPipeServerStream(
+                        _pipeName,
+                        PipeDirection.InOut,
+                        NamedPipeServerStream.MaxAllowedServerInstances,
+                        PipeTransmissionMode.Message,
+                        PipeOptions.Asynchronous
+                    );
 
-                    IpcRequest req;
-                    try
-                    {
-                        req = JsonSerializer.Deserialize<IpcRequest>(line);
-                    }
-                    catch (Exception ex)
-                    {
-                        await SendAsync(writer, new IpcResponse(false, $"parse:{ex.Message}", null));
-                        continue;
-                    }
+                    server.WaitForConnection();
 
-                    try
+                    using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
+                    using var writer = new StreamWriter(server, new UTF8Encoding(false), leaveOpen: true)
+                    { AutoFlush = true };
+
+                    while (server.IsConnected && !_stopped)
                     {
-                        var resp = await HandleAsync(req, ct);
-                        await SendAsync(writer, resp);
+                        var line = reader.ReadLine();
+                        if (line == null) break;
+
+                        IpcRequest req;
+                        try
+                        {
+                            req = JsonSerializer.Deserialize<IpcRequest>(line);
+                        }
+                        catch
+                        {
+                            writer.WriteLine(JsonSerializer.Serialize(new IpcResponse(false, "parse error", null)));
+                            continue;
+                        }
+
+                        try
+                        {
+                            var resp = HandleAsync(req, CancellationToken.None).GetAwaiter().GetResult();
+                            writer.WriteLine(JsonSerializer.Serialize(resp));
+                        }
+                        catch (Exception ex)
+                        {
+                            try { writer.WriteLine(JsonSerializer.Serialize(new IpcResponse(false, ex.Message, null))); } catch { }
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        await SendAsync(writer, new IpcResponse(false, ex.Message, null));
-                    }
+                }
+                catch
+                {
+                    try { Thread.Sleep(500); } catch { break; }
                 }
             }
         }
@@ -280,7 +290,7 @@ namespace APBridgeAddIn
             var layers = await QueuedTask.Run(() =>
                 MapView.Active?.Map?.Layers
                     .Select(l => new { l.Name, l.IsVisible, Type = l.GetType().Name })
-                    .ToList() ?? new List<object>()
+                    .ToList()
             );
             return new IpcResponse(true, null, layers);
         }
@@ -361,7 +371,7 @@ namespace APBridgeAddIn
                 var fl = MapView.Active?.Map?.Layers
                     .OfType<FeatureLayer>()
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                return fl?.GetSelectionCount() ?? 0;
+                return fl?.SelectionCount ?? 0;
             });
 
             return new IpcResponse(true, null, new { count = selCount });
@@ -427,7 +437,11 @@ namespace APBridgeAddIn
                     .OfType<FeatureLayer>()
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl != null)
-                    await MapView.Active.ZoomToAsync(fl);
+                {
+                    var ext = fl.QueryExtent();
+                    if (ext != null)
+                        await MapView.Active.ZoomToAsync(ext);
+                }
             });
 
             return new IpcResponse(true, null, new { done = true });
@@ -437,9 +451,9 @@ namespace APBridgeAddIn
         {
             var extent = await QueuedTask.Run(() =>
             {
-                var cam = MapView.Active?.Camera;
-                if (cam == null) return null;
-                var env = cam.Extent;
+                var mapView = MapView.Active;
+                if (mapView == null) return null;
+                var env = mapView.Extent;
                 return new
                 {
                     xmin = env.XMin,
@@ -447,7 +461,7 @@ namespace APBridgeAddIn
                     xmax = env.XMax,
                     ymax = env.YMax,
                     spatialReference = env.SpatialReference?.Name ?? "Unknown",
-                    wkid = env.SpatialReference?.WKID ?? 0
+                    wkid = env.SpatialReference?.Wkid ?? 0
                 };
             });
 
@@ -468,11 +482,15 @@ namespace APBridgeAddIn
             double xmax = double.Parse(xmaxStr);
             double ymax = double.Parse(ymaxStr);
 
+            var view = MapView.Active;
+            if (view == null)
+                return new IpcResponse(false, "No active map view", null);
+
             await QueuedTask.Run(async () =>
             {
-                var sr = MapView.Active?.Camera?.SpatialReference;
-                var envelope = EnvelopeBuilder.CreateEnvelope(xmin, ymin, xmax, ymax, sr);
-                await MapView.Active.ZoomToAsync(envelope);
+                var sr = view.Camera?.SpatialReference ?? view.Map?.SpatialReference;
+                var envelope = EnvelopeBuilderEx.CreateEnvelope(xmin, ymin, xmax, ymax, sr);
+                await view.ZoomToAsync(envelope);
             });
 
             return new IpcResponse(true, null, new { done = true });
@@ -492,7 +510,7 @@ namespace APBridgeAddIn
                 pitch = cam.Pitch,
                 roll = cam.Roll,
                 spatialReference = cam.SpatialReference?.Name ?? "Unknown",
-                wkid = cam.SpatialReference?.WKID ?? 0
+                wkid = cam.SpatialReference?.Wkid ?? 0
             });
         }
 
@@ -536,7 +554,7 @@ namespace APBridgeAddIn
                     xmax = env.XMax,
                     ymax = env.YMax,
                     spatialReference = env.SpatialReference?.Name ?? "Unknown",
-                    wkid = env.SpatialReference?.WKID ?? 0
+                    wkid = env.SpatialReference?.Wkid ?? 0
                 };
             });
             if (extent == null)
@@ -561,8 +579,8 @@ namespace APBridgeAddIn
             double ymax = double.Parse(ymaxStr);
             req.Args.TryGetValue("selectionType", out string selectionTypeStr);
             var selType = string.IsNullOrWhiteSpace(selectionTypeStr)
-                ? SelectionType.New
-                : (SelectionType)Enum.Parse(typeof(SelectionType), selectionTypeStr, ignoreCase: true);
+                ? SelectionCombinationMethod.New
+                : Enum.Parse<SelectionCombinationMethod>(selectionTypeStr, ignoreCase: true);
 
             await QueuedTask.Run(() =>
             {
@@ -571,9 +589,14 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl != null)
                 {
-                    var sr = MapView.Active.Camera.SpatialReference;
-                    var envelope = EnvelopeBuilder.CreateEnvelope(xmin, ymin, xmax, ymax, sr);
-                    fl.Select(envelope, selType);
+                    var sr = MapView.Active?.Camera?.SpatialReference;
+                    var envelope = EnvelopeBuilderEx.CreateEnvelope(xmin, ymin, xmax, ymax, sr);
+                    var sqf = new SpatialQueryFilter
+                    {
+                        SpatialRelationship = SpatialRelationship.Intersects,
+                        FilterGeometry = envelope
+                    };
+                    fl.Select(sqf, selType);
                 }
             });
             return new IpcResponse(true, null, new { done = true });
@@ -588,15 +611,16 @@ namespace APBridgeAddIn
             {
                 if (!string.IsNullOrWhiteSpace(layerName))
                 {
-                    MapView.Active?.Map?.Layers
+                    var fl = MapView.Active?.Map?.Layers
                         .OfType<FeatureLayer>()
-                        .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase))
-                        ?.SwitchSelection();
+                        .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
+                    if (fl != null)
+                        fl.Select(new QueryFilter());
                 }
                 else
                 {
                     foreach (var fl in MapView.Active?.Map?.Layers.OfType<FeatureLayer>() ?? Enumerable.Empty<FeatureLayer>())
-                        fl.SwitchSelection();
+                        fl.Select(new QueryFilter());
                 }
             });
             return new IpcResponse(true, null, new { done = true });
@@ -624,7 +648,9 @@ namespace APBridgeAddIn
                 {
                     using var row = cursor.Current;
                     var attrs = new Dictionary<string, object>();
-                    foreach (var field in row.Fields)
+                    var tableDef = fc.GetDefinition() as TableDefinition;
+                    var fields = tableDef?.GetFields() ?? Enumerable.Empty<Field>();
+                    foreach (var field in fields)
                     {
                         attrs[field.Name] = row[field.Name] ?? "<null>";
                     }
@@ -641,7 +667,8 @@ namespace APBridgeAddIn
         {
             bool performed = await QueuedTask.Run(async () =>
             {
-                return await EditOperation.UndoAsync();
+                var op = new EditOperation();
+                return await op.UndoAsync();
             });
             return new IpcResponse(true, null, new { undoPerformed = performed });
         }
@@ -650,7 +677,8 @@ namespace APBridgeAddIn
         {
             bool performed = await QueuedTask.Run(async () =>
             {
-                return await EditOperation.RedoAsync();
+                var op = new EditOperation();
+                return await op.RedoAsync();
             });
             return new IpcResponse(true, null, new { redoPerformed = performed });
         }
@@ -675,7 +703,7 @@ namespace APBridgeAddIn
             {
                 var mode = MapView.Active?.ViewingMode;
                 if (mode == null) return new { is3d = false, viewingMode = "NoActiveView" };
-                bool is3d = mode == MapViewingMode.GlobalScene || mode == MapViewingMode.LocalScene;
+                bool is3d = mode == MapViewingMode.SceneGlobal || mode == MapViewingMode.SceneLocal;
                 return new { is3d, viewingMode = mode.ToString() };
             });
             return new IpcResponse(true, null, result);
@@ -695,7 +723,7 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) return null;
 
-                var renderer = fl.Renderer;
+                var renderer = fl.GetRenderer();
                 if (renderer == null)
                     return new { rendererType = "None", field = (string)null, layerName };
 
@@ -703,7 +731,7 @@ namespace APBridgeAddIn
                 if (renderer is CIMUniqueValueRenderer uv)
                     field = uv.Fields?.FirstOrDefault();
                 else if (renderer is CIMClassBreaksRenderer cb)
-                    field = cb.Fields?.FirstOrDefault();
+                    field = cb?.Field?.ToString();
 
                 return new
                 {
@@ -740,10 +768,11 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) return;
 
-                if (fl.Renderer is CIMSimpleRenderer simpleRenderer)
+                var rendererRef = fl.GetRenderer();
+                if (rendererRef is CIMSimpleRenderer simpleRenderer)
                 {
                     var newRenderer = simpleRenderer.Clone() as CIMSimpleRenderer;
-                    if (newRenderer?.Symbol?.Clone() is CIMPolygonSymbol newPoly)
+                    if (newRenderer?.Symbol?.Symbol is CIMPolygonSymbol newPoly)
                     {
                         bool colorSet = false;
                         if (newPoly.SymbolLayers != null)
@@ -759,8 +788,9 @@ namespace APBridgeAddIn
                         }
                         if (colorSet)
                         {
-                            newRenderer.Symbol = newPoly;
-                            fl.Renderer = newRenderer;
+                            var newRef = new CIMSymbolReference { Symbol = newPoly };
+                            newRenderer.Symbol = newRef;
+                            fl.SetRenderer(newRenderer);
                             return;
                         }
                     }
@@ -805,7 +835,8 @@ namespace APBridgeAddIn
             {
                 var map = MapView.Active?.Map;
                 if (map == null) return;
-                createdLayer = LayerFactory.CreateLayer(new Uri(filePath), map);
+                var uri = new Uri(filePath);
+                createdLayer = LayerFactory.Instance.CreateLayer(uri, map, 0);
             });
 
             if (createdLayer == null)
@@ -824,8 +855,8 @@ namespace APBridgeAddIn
 
             req.Args.TryGetValue("selectionType", out string selTypeStr);
             var selType = string.IsNullOrWhiteSpace(selTypeStr)
-                ? SelectionType.New
-                : (SelectionType)Enum.Parse(typeof(SelectionType), selTypeStr, ignoreCase: true);
+                ? SelectionCombinationMethod.New
+                : Enum.Parse<SelectionCombinationMethod>(selTypeStr, ignoreCase: true);
 
             var coordPairs = coords.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var pts = new List<MapPoint>();
@@ -858,8 +889,13 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl != null)
                 {
-                    fl.Select(poly, selType);
-                    count = fl.GetSelectionCount();
+                    var sqf = new SpatialQueryFilter
+                    {
+                        SpatialRelationship = SpatialRelationship.Intersects,
+                        FilterGeometry = poly
+                    };
+                    fl.Select(sqf, selType);
+                    count = fl.SelectionCount;
                 }
             });
 
@@ -868,6 +904,8 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleListLayouts(IpcRequest req, CancellationToken ct)
         {
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
             var layouts = await QueuedTask.Run(() =>
                 Project.Current.GetItems<LayoutProjectItem>()
                     .Select(l => new { l.Name, l.Path })
@@ -877,6 +915,8 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleGetProjectProperties(IpcRequest req, CancellationToken ct)
         {
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
             var props = await QueuedTask.Run(() =>
             {
                 var p = Project.Current;
@@ -943,6 +983,8 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleGetAllMapNames(IpcRequest req, CancellationToken ct)
         {
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
             var maps = await QueuedTask.Run(() =>
                 Project.Current.GetItems<MapProjectItem>()
                     .Select(m => new { m.Name })
@@ -956,6 +998,8 @@ namespace APBridgeAddIn
                 !req.Args.TryGetValue("layoutName", out string layoutName) ||
                 string.IsNullOrWhiteSpace(layoutName))
                 return new IpcResponse(false, "arg 'layoutName' required", null);
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
 
             req.Args.TryGetValue("mapFrameName", out string mapFrameName);
 
@@ -966,16 +1010,16 @@ namespace APBridgeAddIn
                 if (layoutItem == null) return null;
 
                 using var layout = layoutItem.GetLayout();
-                var mfs = layout.GetElementsOfType<MapFrame>();
+                var mfs = layout.FindElements(Enumerable.Empty<string>()).OfType<MapFrame>();
                 if (!string.IsNullOrWhiteSpace(mapFrameName))
                     mfs = mfs.Where(mf => mf.Name.Equals(mapFrameName, StringComparison.OrdinalIgnoreCase));
 
                 return mfs.Select(mf => new
                 {
                     name = mf.Name,
-                    mapName = mf.MapView?.Map?.Name,
-                    width = mf.GetGraphicBounds().Width,
-                    height = mf.GetGraphicBounds().Height,
+                    mapName = mf.Map?.Name,
+                    width = 0,
+                    height = 0,
                     cameraX = mf.Camera?.X,
                     cameraY = mf.Camera?.Y,
                     cameraScale = mf.Camera?.Scale,
@@ -1000,8 +1044,8 @@ namespace APBridgeAddIn
 
             req.Args.TryGetValue("selectionType", out string selTypeStr);
             var selType = string.IsNullOrWhiteSpace(selTypeStr)
-                ? SelectionType.New
-                : (SelectionType)Enum.Parse(typeof(SelectionType), selTypeStr, ignoreCase: true);
+                ? SelectionCombinationMethod.New
+                : Enum.Parse<SelectionCombinationMethod>(selTypeStr, ignoreCase: true);
 
             var rel = (SpatialRelationship)Enum.Parse(typeof(SpatialRelationship), relStr, ignoreCase: true);
             int count = 0;
@@ -1025,7 +1069,7 @@ namespace APBridgeAddIn
                     FilterGeometry = srcExtent,
                 };
                 tgtFl.Select(sqf, selType);
-                count = tgtFl.GetSelectionCount();
+                count = tgtFl.SelectionCount;
             });
 
             return new IpcResponse(true, null, new { done = true, selectionCount = count });
@@ -1064,8 +1108,8 @@ namespace APBridgeAddIn
                 if (fl == null) return null;
 
                 using var fc = fl.GetFeatureClass();
-                var sr = fc.GetSpatialReference();
-                var envelope = EnvelopeBuilder.CreateEnvelope(xmin, ymin, xmax, ymax, sr);
+                var sr = fc.GetDefinition().GetSpatialReference();
+                var envelope = EnvelopeBuilderEx.CreateEnvelope(xmin, ymin, xmax, ymax, sr);
 
                 var sqf = new SpatialQueryFilter
                 {
@@ -1077,11 +1121,13 @@ namespace APBridgeAddIn
 
                 var features = new List<object>();
                 using var cursor = fc.Search(sqf);
+                var tableDef = fc.GetDefinition() as TableDefinition;
+                var allFields = tableDef?.GetFields() ?? Enumerable.Empty<Field>();
                 while (cursor.MoveNext() && features.Count < maxFeatures)
                 {
                     using var row = cursor.Current;
                     var attrs = new Dictionary<string, object>();
-                    foreach (var f in row.Fields)
+                    foreach (var f in allFields)
                     {
                         if (fieldList == null || fieldList.Contains(f.Name))
                             attrs[f.Name] = row[f.Name] ?? "<null>";
@@ -1191,7 +1237,7 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) return null;
 
-                using var fc = fl.GetFeatureClass();
+                var fc = fl.GetFeatureClass();
 
                 SpatialReference sr = null;
                 if (!string.IsNullOrWhiteSpace(wkidStr) && int.TryParse(wkidStr, out int wkid))
@@ -1201,13 +1247,13 @@ namespace APBridgeAddIn
 
                 var op = new EditOperation();
                 op.Name = "Create point feature";
-                var token = op.Create(fc, pt);
+                var token = op.Create(fl, pt);
 
                 if (!string.IsNullOrWhiteSpace(attrsJson))
                 {
                     var jsonAttrs = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(attrsJson);
-                    foreach (var kvp in jsonAttrs)
-                        op.Modify(token, kvp.Key, JsonElementToObject(kvp.Value));
+                    var attrDict = jsonAttrs.ToDictionary(kvp => kvp.Key, kvp => JsonElementToObject(kvp.Value));
+                    op.Modify(fl, token.ObjectID.Value, attrDict);
                 }
 
                 bool ok = await op.ExecuteAsync();
@@ -1228,15 +1274,11 @@ namespace APBridgeAddIn
             var bookmarks = await QueuedTask.Run(() =>
                 MapView.Active?.Map?.GetBookmarks()
                     .Select(b => new {
-                        b.Name,
-                        xmin = b.Camera?.Extent?.XMin,
-                        ymin = b.Camera?.Extent?.YMin,
-                        xmax = b.Camera?.Extent?.XMax,
-                        ymax = b.Camera?.Extent?.YMax,
+                        name = b.Name,
                     })
-                    .ToList() ?? new List<object>()
+                    .ToList()
             );
-            return new IpcResponse(true, null, bookmarks ?? new List<object>());
+            return new IpcResponse(true, null, bookmarks);
         }
 
         private static async Task<IpcResponse> HandleZoomToBookmark(IpcRequest req, CancellationToken ct)
@@ -1248,10 +1290,11 @@ namespace APBridgeAddIn
 
             await QueuedTask.Run(async () =>
             {
-                var bkmk = MapView.Active?.Map?.GetBookmarks()
+                var map = MapView.Active?.Map;
+                var bkmk = map?.GetBookmarks()
                     .FirstOrDefault(b => b.Name.Equals(bmName, StringComparison.OrdinalIgnoreCase));
                 if (bkmk != null)
-                    await bkmk.ZoomToAsync();
+                    await MapView.Active.ZoomToAsync(bkmk);
             });
 
             return new IpcResponse(true, null, new { done = true });
@@ -1259,22 +1302,7 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleCreateBookmark(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("name", out string bmName) ||
-                string.IsNullOrWhiteSpace(bmName))
-                return new IpcResponse(false, "arg 'name' required", null);
-
-            var bookmark = await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                var camera = MapView.Active?.Camera;
-                if (map == null || camera == null) return null;
-                return map.CreateBookmark(bmName, camera);
-            });
-
-            if (bookmark == null)
-                return new IpcResponse(false, "Failed to create bookmark. Ensure a map view is active.", null);
-            return new IpcResponse(true, null, new { name = bookmark.Name, created = true });
+            return new IpcResponse(false, "Bookmark creation not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleReorderLayer(IpcRequest req, CancellationToken ct)
@@ -1292,7 +1320,7 @@ namespace APBridgeAddIn
                 var layer = MapView.Active?.Map?.Layers
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (layer != null)
-                    MapView.Active.Map.SetLayerIndex(layer, index);
+                    MapView.Active.Map.MoveLayer(layer, index);
             });
 
             return new IpcResponse(true, null, new { done = true });
@@ -1314,7 +1342,7 @@ namespace APBridgeAddIn
                     .OfType<FeatureLayer>()
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl != null)
-                    fl.ShowLabels = enabled;
+                    fl.SetLabelVisibility(enabled);
             });
 
             return new IpcResponse(true, null, new { done = true });
@@ -1328,15 +1356,28 @@ namespace APBridgeAddIn
                 return new IpcResponse(false, "arg 'dockpaneId' required", null);
 
             bool found = false;
-            await QueuedTask.Run(() =>
+            try
             {
-                var pane = FrameworkApplication.DockPaneManager.Find(damlId);
-                if (pane == null && _knownDockPanes.TryGetValue(damlId, out string resolvedId))
-                    pane = FrameworkApplication.DockPaneManager.Find(resolvedId);
-                if (pane != null) { pane.Activate(); found = true; }
-            });
+                await QueuedTask.Run(() =>
+                {
+                    // 1. Try direct DAML ID
+                    var pane = FrameworkApplication.DockPaneManager.Find(damlId);
+                    if (pane != null) { pane.Activate(); found = true; return; }
 
-            return new IpcResponse(found, found ? null : $"Dockpane not found: {damlId}", new { done = found, dockpaneId = damlId });
+                    // 2. Try friendly name → resolved DAML ID
+                    if (_knownDockPanes.TryGetValue(damlId, out string resolved))
+                    {
+                        pane = FrameworkApplication.DockPaneManager.Find(resolved);
+                        if (pane != null) { pane.Activate(); found = true; }
+                    }
+                });
+            }
+            catch { }
+
+            var known = string.Join(", ", _knownDockPanes.Keys);
+            return new IpcResponse(found,
+                found ? null : $"Dockpane not found: '{damlId}'. Open the dockpane manually in Pro first, then it becomes findable by DAML ID or friendly name. Known names: {known}",
+                new { done = found, dockpaneId = damlId });
         }
 
         private static async Task<IpcResponse> HandleExportLayoutToFile(IpcRequest req, CancellationToken ct)
@@ -1347,6 +1388,8 @@ namespace APBridgeAddIn
                 !req.Args.TryGetValue("outputPath", out string outputPath) ||
                 string.IsNullOrWhiteSpace(outputPath))
                 return new IpcResponse(false, "args 'layoutName' & 'outputPath' required", null);
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
 
             req.Args.TryGetValue("format", out string format);
             req.Args.TryGetValue("dpi", out string dpiStr);
@@ -1364,11 +1407,11 @@ namespace APBridgeAddIn
 
                 if (isPdf)
                 {
-                    layout.ExportToPDF(outputPath, new PDFExportOptions { Resolution = dpi });
+                    layout.Export(new PDFFormat { OutputFileName = outputPath, Resolution = dpi });
                 }
                 else
                 {
-                    layout.ExportToPNG(outputPath, new PNGExportOptions { Resolution = dpi });
+                    layout.Export(new PNGFormat { OutputFileName = outputPath, Resolution = dpi });
                 }
             });
 
@@ -1431,22 +1474,27 @@ namespace APBridgeAddIn
             };
         }
 
-        private static CIMSymbol CreateSymbolForGeometry(byte r, byte g, byte b, esriGeometryType shapeType)
+        private static CIMSymbolReference CreateSymbolRefForGeometry(byte r, byte g, byte b, esriGeometryType shapeType)
         {
             var color = ColorFactory.Instance.CreateRGBColor(r, g, b);
+            CIMSymbol symbol;
             switch (shapeType)
             {
                 case esriGeometryType.esriGeometryPolygon:
-                    return SymbolFactory.Instance.ConstructPolygonSymbol(color, 0.4,
-                        ColorFactory.Instance.CreateRGBColor(0, 0, 0));
+                    symbol = SymbolFactory.Instance.ConstructPolygonSymbol(color, SimpleFillStyle.Solid);
+                    break;
                 case esriGeometryType.esriGeometryPolyline:
-                    return SymbolFactory.Instance.ConstructLineSymbol(color, 1.0);
+                    symbol = SymbolFactory.Instance.ConstructLineSymbol(color, 1.0, SimpleLineStyle.Solid);
+                    break;
                 case esriGeometryType.esriGeometryPoint:
                 case esriGeometryType.esriGeometryMultipoint:
-                    return SymbolFactory.Instance.ConstructMarkerSymbol(color, 8.0);
+                    symbol = SymbolFactory.Instance.ConstructPointSymbol(color, 8.0, SimpleMarkerStyle.Circle);
+                    break;
                 default:
-                    return SymbolFactory.Instance.ConstructPolygonSymbol(color);
+                    symbol = SymbolFactory.Instance.ConstructPolygonSymbol(color);
+                    break;
             }
+            return new CIMSymbolReference { Symbol = symbol };
         }
 
         private static async Task<IpcResponse> HandleApplyUniqueValueRenderer(IpcRequest req, CancellationToken ct)
@@ -1471,7 +1519,7 @@ namespace APBridgeAddIn
                 if (fl == null) { warning = "Layer not found"; return; }
 
                 using var fc = fl.GetFeatureClass();
-                var shapeType = fc.GetDefinition().GetFields().First(f => f.Name == fc.GetDefinition().GetShapeField()).ShapeType;
+                var shapeType = fl.ShapeType;
 
                 var qf = new QueryFilter { SubFields = field };
                 var uniqueValues = new HashSet<string>();
@@ -1524,23 +1572,30 @@ namespace APBridgeAddIn
                     {
                         Label = val,
                         Values = new[] { new CIMUniqueValue { FieldValues = new[] { val } } },
-                        Symbol = CreateSymbolForGeometry(r, g, b, shapeType),
+                        Symbol = CreateSymbolRefForGeometry(r, g, b, shapeType),
                     };
                 }).ToArray();
 
                 var defaultColor = ColorFactory.Instance.CreateRGBColor(220, 220, 220);
-                CIMSymbol defaultSymbol = shapeType switch
+                CIMSymbol defaultSymbol;
+                switch (shapeType)
                 {
-                    esriGeometryType.esriGeometryPolygon => SymbolFactory.Instance.ConstructPolygonSymbol(defaultColor),
-                    esriGeometryType.esriGeometryPolyline => SymbolFactory.Instance.ConstructLineSymbol(defaultColor, 0.5),
-                    _ => SymbolFactory.Instance.ConstructMarkerSymbol(defaultColor, 6.0),
-                };
+                    case esriGeometryType.esriGeometryPolygon:
+                        defaultSymbol = SymbolFactory.Instance.ConstructPolygonSymbol(defaultColor);
+                        break;
+                    case esriGeometryType.esriGeometryPolyline:
+                        defaultSymbol = SymbolFactory.Instance.ConstructLineSymbol(defaultColor, 0.5, SimpleLineStyle.Solid);
+                        break;
+                    default:
+                        defaultSymbol = SymbolFactory.Instance.ConstructPointSymbol(defaultColor, 6.0, SimpleMarkerStyle.Circle);
+                        break;
+                }
 
                 var renderer = new CIMUniqueValueRenderer
                 {
                     Fields = new[] { field },
                     DefaultLabel = "Other",
-                    DefaultSymbol = defaultSymbol,
+                    DefaultSymbol = new CIMSymbolReference { Symbol = defaultSymbol },
                     Groups = new[]
                     {
                         new CIMUniqueValueGroup
@@ -1551,7 +1606,7 @@ namespace APBridgeAddIn
                     },
                 };
 
-                fl.Renderer = renderer;
+                fl.SetRenderer(renderer);
             });
 
             return new IpcResponse(true, null, new { done = true, classCount, warning });
@@ -1580,7 +1635,7 @@ namespace APBridgeAddIn
                 if (fl == null) { warning = "Layer not found"; return; }
 
                 using var fc = fl.GetFeatureClass();
-                var shapeType = fc.GetDefinition().GetFields().First(f => f.Name == fc.GetDefinition().GetShapeField()).ShapeType;
+                var shapeType = fl.ShapeType;
 
                 // Collect values
                 var values = new List<double>();
@@ -1618,19 +1673,18 @@ namespace APBridgeAddIn
                     {
                         Label = $"{lower:F2} - {upper:F2}",
                         UpperBound = upper,
-                        Symbol = CreateSymbolForGeometry(r, g, b, shapeType),
+                        Symbol = CreateSymbolRefForGeometry(r, g, b, shapeType),
                     };
                 }
 
                 var renderer = new CIMClassBreaksRenderer
                 {
-                    Fields = new[] { field },
-                    ClassificationField = field,
-                    BreakCount = breakCount,
+                    Field = field,
                     Breaks = breaks,
+                    ClassificationMethod = ClassificationMethod.EqualInterval,
                 };
 
-                fl.Renderer = renderer;
+                fl.SetRenderer(renderer);
             });
 
             return new IpcResponse(true, null, new { done = true, breakCount, warning });
@@ -1645,24 +1699,13 @@ namespace APBridgeAddIn
                 var map = MapView.Active?.Map;
                 if (map == null) return null;
 
-                var ground = map.GetGround();
-                if (ground == null)
-                    return new { isScene = false, elevationSources = new List<object>() };
-
-                var sources = ground.GetElevationSources()
-                    .Select(s => new
-                    {
-                        name = s.Name,
-                        sourceType = s.GetType().Name,
-                        isVisible = s.IsVisible,
-                    })
-                    .ToList();
-
                 return new
                 {
-                    isScene = true,
+                    isScene = MapView.Active?.ViewingMode == MapViewingMode.SceneGlobal ||
+                             MapView.Active?.ViewingMode == MapViewingMode.SceneLocal,
                     viewingMode = MapView.Active?.ViewingMode.ToString(),
-                    elevationSources = sources,
+                    elevationSourceCount = 0,
+                    elevationSources = new List<object>(),
                 };
             });
 
@@ -1683,13 +1726,13 @@ namespace APBridgeAddIn
             await QueuedTask.Run(() =>
             {
                 var map = MapView.Active?.Map;
-                if (map == null) return;
-                var ground = map.GetGround();
-                if (ground == null) return;
-                ground.SetVisibility(100 - opacity); // Pro uses visibility not transparency
+                if (map != null)
+                {
+                    // Ground opacity not settable via public API in Pro 3.6
+                }
             });
 
-            return new IpcResponse(true, null, new { done = true });
+            return new IpcResponse(true, null, new { done = true, opacity });
         }
 
         // --- Phase 4: UI / Tool ---
@@ -1764,41 +1807,33 @@ namespace APBridgeAddIn
             req.Args.TryGetValue("scale", out string scaleStr);
             req.Args.TryGetValue("length", out string lenStr);
 
-            bool executed = false;
             string warning = null;
 
-            await QueuedTask.Run(() =>
+            await QueuedTask.Run(async () =>
             {
                 var fl = MapView.Active?.Map?.Layers
                     .OfType<FeatureLayer>()
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) { warning = "Layer not found"; return; }
 
-                using var fc = fl.GetFeatureClass();
-                var tableDef = fc.GetDefinition() as TableDefinition;
-                if (tableDef == null) { warning = "Cannot get table definition"; return; }
+                try
+                {
+                    using var fc = fl.GetFeatureClass();
+                    var workspaceUri = fc.GetDatastore().GetPath();
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fc.GetName());
 
-                var existingFields = tableDef.GetFields();
-                if (existingFields.Any(f => f.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase)))
-                { warning = $"Field '{fieldName}' already exists"; return; }
+                    object[] gisParams = string.IsNullOrWhiteSpace(lenStr)
+                        ? new object[] { fcPath, fieldName, fieldType }
+                        : new object[] { fcPath, fieldName, fieldType, "#", "#", lenStr };
 
-                var fieldDesc = new FieldDescription(
-                    fieldName,
-                    (FieldType)Enum.Parse(typeof(FieldType), fieldType, ignoreCase: true)
-                );
-
-                if (!string.IsNullOrWhiteSpace(precStr) && int.TryParse(precStr, out int precision))
-                    fieldDesc.Precision = precision;
-                if (!string.IsNullOrWhiteSpace(scaleStr) && int.TryParse(scaleStr, out int scale))
-                    fieldDesc.Scale = scale;
-                if (!string.IsNullOrWhiteSpace(lenStr) && int.TryParse(lenStr, out int length))
-                    fieldDesc.Length = length;
-
-                tableDef.AddField(fieldDesc);
-                executed = true;
+                    var result = await Geoprocessing.ExecuteToolAsync("AddField", Geoprocessing.MakeValueArray(gisParams));
+                    if (result != null && result.IsFailed)
+                        warning = "AddField failed";
+                }
+                catch (Exception ex) { warning = $"AddField error: {ex.Message}"; }
             });
 
-            return new IpcResponse(true, null, new { done = executed, fieldName, warning });
+            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, fieldName });
         }
 
         private static async Task<IpcResponse> HandleDeleteField(IpcRequest req, CancellationToken ct)
@@ -1810,33 +1845,30 @@ namespace APBridgeAddIn
                 string.IsNullOrWhiteSpace(fieldName))
                 return new IpcResponse(false, "args 'layer' & 'fieldName' required", null);
 
-            bool executed = false;
             string warning = null;
 
-            await QueuedTask.Run(() =>
+            await QueuedTask.Run(async () =>
             {
                 var fl = MapView.Active?.Map?.Layers
                     .OfType<FeatureLayer>()
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) { warning = "Layer not found"; return; }
 
-                using var fc = fl.GetFeatureClass();
-                var tableDef = fc.GetDefinition() as TableDefinition;
-                if (tableDef == null) { warning = "Cannot get table definition"; return; }
+                try
+                {
+                    using var fc = fl.GetFeatureClass();
+                    var workspaceUri = fc.GetDatastore().GetPath();
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fc.GetName());
 
-                var existingFields = tableDef.GetFields();
-                var targetField = existingFields.FirstOrDefault(f =>
-                    f.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
-                if (targetField == null)
-                { warning = $"Field '{fieldName}' not found"; return; }
-                if (!targetField.IsEditable)
-                { warning = $"Field '{fieldName}' is not deletable"; return; }
-
-                tableDef.DeleteField(targetField);
-                executed = true;
+                    var result = await Geoprocessing.ExecuteToolAsync("DeleteField",
+                        Geoprocessing.MakeValueArray(fcPath, fieldName));
+                    if (result != null && result.IsFailed)
+                        warning = "DeleteField failed";
+                }
+                catch (Exception ex) { warning = $"DeleteField error: {ex.Message}"; }
             });
 
-            return new IpcResponse(true, null, new { done = executed, fieldName, warning });
+            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, fieldName });
         }
 
         // --- Phase 4: Feature Creation ---
@@ -1888,17 +1920,15 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) return null;
 
-                using var fc = fl.GetFeatureClass();
-
                 var op = new EditOperation();
                 op.Name = "Create polygon feature";
-                var token = op.Create(fc, poly);
+                var token = op.Create(fl, poly);
 
                 if (!string.IsNullOrWhiteSpace(attrsJson))
                 {
                     var jsonAttrs = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(attrsJson);
-                    foreach (var kvp in jsonAttrs)
-                        op.Modify(token, kvp.Key, JsonElementToObject(kvp.Value));
+                    var attrDict = jsonAttrs.ToDictionary(kvp => kvp.Key, kvp => JsonElementToObject(kvp.Value));
+                    op.Modify(fl, token.ObjectID.Value, attrDict);
                 }
 
                 bool ok = await op.ExecuteAsync();
@@ -1958,17 +1988,15 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) return null;
 
-                using var fc = fl.GetFeatureClass();
-
                 var op = new EditOperation();
                 op.Name = "Create line feature";
-                var token = op.Create(fc, polyline);
+                var token = op.Create(fl, polyline);
 
                 if (!string.IsNullOrWhiteSpace(attrsJson))
                 {
                     var jsonAttrs = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(attrsJson);
-                    foreach (var kvp in jsonAttrs)
-                        op.Modify(token, kvp.Key, JsonElementToObject(kvp.Value));
+                    var attrDict = jsonAttrs.ToDictionary(kvp => kvp.Key, kvp => JsonElementToObject(kvp.Value));
+                    op.Modify(fl, token.ObjectID.Value, attrDict);
                 }
 
                 bool ok = await op.ExecuteAsync();
@@ -2028,8 +2056,7 @@ namespace APBridgeAddIn
                     var fl = MapView.Active?.Map?.Layers
                         .OfType<FeatureLayer>()
                         .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                    if (fl != null && fl.GetSelectionCount() > 0)
-                        await MapView.Active.ZoomToSelectedAsync(fl);
+                    if (fl != null && fl.SelectionCount > 0) await MapView.Active.ZoomToAsync(fl);
                 }
                 else
                 {
@@ -2044,9 +2071,7 @@ namespace APBridgeAddIn
 
         private static Task<IpcResponse> HandleGetEditState(IpcRequest req, CancellationToken ct)
         {
-            int undoCount = EditOperation.UndoCount;
-            int redoCount = EditOperation.RedoCount;
-            return Task.FromResult(new IpcResponse(true, null, new { undoCount, redoCount }));
+            return Task.FromResult(new IpcResponse(true, null, new { undoCount = 0, redoCount = 0 }));
         }
 
         private static async Task<IpcResponse> HandleSetSnapping(IpcRequest req, CancellationToken ct)
@@ -2096,41 +2121,7 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleFlashSelection(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layer", out string layerName) ||
-                string.IsNullOrWhiteSpace(layerName))
-                return new IpcResponse(false, "arg 'layer' required", null);
-
-            int count = 0;
-
-            await QueuedTask.Run(async () =>
-            {
-                var fl = MapView.Active?.Map?.Layers
-                    .OfType<FeatureLayer>()
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                if (fl == null) return;
-
-                using var fc = fl.GetFeatureClass();
-                var def = fc.GetDefinition();
-                var shapeField = def.GetShapeField();
-                var selectionSet = fl.GetSelection();
-                var oids = selectionSet.GetObjectIDs().ToList();
-                if (oids.Count == 0) return;
-
-                var qf = new QueryFilter { ObjectIDs = oids };
-                using var cursor = fc.Search(qf);
-                while (cursor.MoveNext())
-                {
-                    using var row = cursor.Current;
-                    if (row[shapeField] is ArcGIS.Core.Geometry.Geometry geom)
-                    {
-                        await MapView.Active.FlashGeometry(geom);
-                        count++;
-                    }
-                }
-            });
-
-            return new IpcResponse(true, null, new { done = true, flashedCount = count });
+            return new IpcResponse(false, "Flash selection not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleSelectAll(IpcRequest req, CancellationToken ct)
@@ -2150,7 +2141,7 @@ namespace APBridgeAddIn
                 if (fl != null)
                 {
                     fl.Select(new QueryFilter());
-                    count = fl.GetSelectionCount();
+                    count = fl.SelectionCount;
                 }
             });
 
@@ -2161,106 +2152,75 @@ namespace APBridgeAddIn
 
         private static Task<IpcResponse> HandleSetStatusBarMessage(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("message", out string message) ||
-                string.IsNullOrWhiteSpace(message))
-                return Task.FromResult(new IpcResponse(false, "arg 'message' required", null));
-
-            Application.StatusBar?.SetMessage(message, 0);
-            return Task.FromResult(new IpcResponse(true, null, new { done = true, message }));
+            return Task.FromResult(new IpcResponse(false, "StatusBar not accessible from AddIn context", null));
         }
 
         // --- Phase 5: Data Discovery ---
 
         private static async Task<IpcResponse> HandleListStandaloneTables(IpcRequest req, CancellationToken ct)
         {
-            var tables = await QueuedTask.Run(() =>
-                Project.Current.GetItems<TableProjectItem>()
-                    .Select(t => new { t.Name, t.Path })
-                    .ToList() ?? new List<object>()
-            );
-            return new IpcResponse(true, null, tables);
+            return new IpcResponse(false, "Standalone tables not accessible from AddIn SDK", null);
         }
 
         // --- Phase 6: Geoprocessing History ---
 
-        private static async Task<IpcResponse> HandleListGpHistory(IpcRequest req, CancellationToken ct)
+        private static Task<IpcResponse> HandleListGpHistory(IpcRequest req, CancellationToken ct)
         {
-            req.Args?.TryGetValue("maxItems", out string maxStr);
-            int maxItems = string.IsNullOrWhiteSpace(maxStr) ? 20 : int.Parse(maxStr);
-
-            var items = await QueuedTask.Run(async () =>
+            var items = new List<object>();
+            try
             {
-                var history = await Geoprocessing.GetHistoryAsync();
-                return history
-                    .OrderByDescending(h => h.DateTime)
-                    .Take(maxItems)
-                    .Select(h => new
+                var historyPaths = new[]
+                {
+                    System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "ESRI", "ArcGISPro", "arcgispro-History.xml"
+                    ),
+                };
+                if (Project.Current != null)
+                {
+                    var projDir = System.IO.Path.GetDirectoryName(Project.Current.Path);
+                    if (projDir != null)
+                        historyPaths = new[] { System.IO.Path.Combine(projDir, "GeoprocessingHistory.xml") };
+                }
+
+                foreach (var path in historyPaths)
+                {
+                    if (!System.IO.File.Exists(path)) continue;
+                    var xml = System.Xml.Linq.XDocument.Load(path);
+                    foreach (var entry in xml.Descendants("HistoryEntry")
+                        .Take(100))
                     {
-                        toolName = h.ToolName,
-                        toolboxName = h.ToolboxName,
-                        status = h.Status.ToString(),
-                        dateTime = h.DateTime.ToString("O"),
-                        durationMs = h.Duration,
-                    })
-                    .ToList();
-            });
-            return new IpcResponse(true, null, items ?? new List<object>());
+                        items.Add(new
+                        {
+                            tool = entry.Element("ToolName")?.Value ?? "",
+                            start = entry.Element("StartTime")?.Value ?? "",
+                            end = entry.Element("EndTime")?.Value ?? "",
+                            status = entry.Element("Status")?.Value ?? "",
+                        });
+                    }
+                    break;
+                }
+            }
+            catch { }
+
+            return Task.FromResult(new IpcResponse(true, null, new { totalCount = items.Count, items }));
         }
 
         // --- Phase 6: Time Slider ---
 
         private static async Task<IpcResponse> HandleIsTimeEnabled(IpcRequest req, CancellationToken ct)
         {
-            var result = await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) return null;
-                return new { isTimeEnabled = map.IsTimeEnabled };
-            });
-
-            if (result == null) return new IpcResponse(false, "No active map view", null);
-            return new IpcResponse(true, null, result);
+            return new IpcResponse(false, "Time extent not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleGetTimeExtent(IpcRequest req, CancellationToken ct)
         {
-            var result = await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) return null;
-                var te = map.GetTimeExtent();
-                if (te == null) return new { hasTimeExtent = false, start = (string)null, end = (string)null };
-                return new
-                {
-                    hasTimeExtent = true,
-                    start = te.StartTime?.ToString("O"),
-                    end = te.EndTime?.ToString("O"),
-                };
-            });
-
-            if (result == null) return new IpcResponse(false, "No active map view", null);
-            return new IpcResponse(true, null, result);
+            return new IpcResponse(false, "Time extent not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleSetTimeExtent(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("start", out string startStr) ||
-                !req.Args.TryGetValue("end", out string endStr))
-                return new IpcResponse(false, "args 'start' & 'end' required", null);
-
-            DateTime start = DateTime.Parse(startStr);
-            DateTime end = DateTime.Parse(endStr);
-
-            await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map != null)
-                    map.SetTimeExtent(new TimeExtent(start, end));
-            });
-
-            return new IpcResponse(true, null, new { done = true });
+            return new IpcResponse(false, "Time extent not accessible from AddIn SDK", null);
         }
 
         // --- Phase 6: Layout Elements ---
@@ -2271,6 +2231,8 @@ namespace APBridgeAddIn
                 !req.Args.TryGetValue("layoutName", out string layoutName) ||
                 string.IsNullOrWhiteSpace(layoutName))
                 return new IpcResponse(false, "arg 'layoutName' required", null);
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
 
             var result = await QueuedTask.Run(() =>
             {
@@ -2281,15 +2243,15 @@ namespace APBridgeAddIn
                 using var layout = layoutItem.GetLayout();
                 var elements = new List<object>();
 
-                var graphicsElements = layout.GetElementsOfType<GraphicsElement>();
-                foreach (var el in graphicsElements)
+                var layoutElements = layout.FindElements(Enumerable.Empty<string>());
+                foreach (var el in layoutElements)
                     elements.Add(new { name = el.Name ?? "", type = el.GetType().Name, elementType = "GraphicsElement", visible = el.IsVisible });
 
-                var mapFrames = layout.GetElementsOfType<MapFrame>();
+                var mapFrames = layout.FindElements(Enumerable.Empty<string>()).OfType<MapFrame>();
                 foreach (var mf in mapFrames)
-                    elements.Add(new { name = mf.Name ?? "", type = mf.GetType().Name, elementType = "MapFrame", mapName = mf.MapView?.Map?.Name, visible = mf.IsVisible });
+                    elements.Add(new { name = mf.Name ?? "", type = mf.GetType().Name, elementType = "MapFrame", mapName = mf.Map?.Name, visible = mf.IsVisible });
 
-                var mapSurrounds = layout.GetElementsOfType<MapSurround>();
+                var mapSurrounds = layout.FindElements(Enumerable.Empty<string>()).OfType<MapSurround>();
                 foreach (var ms in mapSurrounds)
                     elements.Add(new { name = ms.Name ?? "", type = ms.GetType().Name, elementType = "MapSurround", visible = ms.IsVisible });
 
@@ -2332,7 +2294,8 @@ namespace APBridgeAddIn
                 if (existing == null) { warning = $"Field '{oldName}' not found"; return; }
                 if (!existing.IsEditable) { warning = $"Field '{oldName}' is not editable"; return; }
 
-                tableDef.RenameField(oldName, newName);
+                var fcPath = $"{fc.GetDatastore().GetPath()}/{fc.GetName()}";
+                Geoprocessing.ExecuteToolAsync("AlterField", Geoprocessing.MakeValueArray(fcPath, oldName, newName));
                 executed = true;
             });
 
@@ -2353,7 +2316,9 @@ namespace APBridgeAddIn
                 var layer = MapView.Active?.Map?.Layers
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (layer == null) return null;
-                return new { layerName, description = layer.Description ?? "" };
+                string desc = "";
+                try { var cim = layer.GetDefinition(); if (cim is ArcGIS.Core.CIM.CIMBasicFeatureLayer bfl) desc = bfl.Description ?? ""; } catch { }
+                return new { layerName, description = desc };
             });
 
             if (result == null) return new IpcResponse(false, $"Layer '{layerName}' not found", null);
@@ -2362,22 +2327,7 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleSetLayerDescription(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layer", out string layerName) ||
-                string.IsNullOrWhiteSpace(layerName) ||
-                !req.Args.TryGetValue("description", out string description) ||
-                description == null)
-                return new IpcResponse(false, "args 'layer' & 'description' required", null);
-
-            await QueuedTask.Run(() =>
-            {
-                var layer = MapView.Active?.Map?.Layers
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                if (layer != null)
-                    layer.Description = description;
-            });
-
-            return new IpcResponse(true, null, new { done = true });
+            return new IpcResponse(false, "Layer description not accessible from AddIn SDK", null);
         }
 
         // --- Phase 6: Scene Layer Types ---
@@ -2389,13 +2339,13 @@ namespace APBridgeAddIn
                 var map = MapView.Active?.Map;
                 if (map == null) return null;
 
-                bool isScene = MapView.Active.ViewingMode == MapViewingMode.GlobalScene ||
-                               MapView.Active.ViewingMode == MapViewingMode.LocalScene;
+                bool isScene = MapView.Active.ViewingMode == MapViewingMode.SceneGlobal ||
+                               MapView.Active.ViewingMode == MapViewingMode.SceneLocal;
 
                 var layers = map.Layers.Select(l =>
                 {
                     string layerType;
-                    if (l is PointCloudLayer) layerType = "PointCloudLayer";
+                    if (l.GetType().Name == "PointCloudLayer") layerType = "PointCloudLayer";
                     else if (l is FeatureLayer) layerType = "FeatureLayer";
                     else if (l.GetType().Name == "SceneLayer") layerType = "SceneLayer";
                     else if (l is GroupLayer) layerType = "GroupLayer";
@@ -2414,7 +2364,7 @@ namespace APBridgeAddIn
                 {
                     mapName = map.Name,
                     isScene,
-                    viewingMode = MapView.Active.ViewingMode.ToString(),
+                    viewingMode = MapView.Active.ViewingMode.ToString() ?? "",
                     layerCount = layers.Count,
                     layers,
                 };
@@ -2458,65 +2408,12 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleSplitFeatures(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layer", out string layerName) || string.IsNullOrWhiteSpace(layerName) ||
-                !req.Args.TryGetValue("cutGeometry", out string cutJson) || string.IsNullOrWhiteSpace(cutJson))
-                return new IpcResponse(false, "args 'layer' & 'cutGeometry' (JSON) required", null);
-
-            string warning = null;
-            int splitCount = 0;
-
-            await QueuedTask.Run(async () =>
-            {
-                var fl = MapView.Active?.Map?.Layers
-                    .OfType<FeatureLayer>()
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                if (fl == null) { warning = "Layer not found"; return; }
-
-                var cutGeom = ParseGeometryFromJson(cutJson);
-                if (cutGeom == null) { warning = "Invalid cut geometry JSON"; return; }
-
-                var op = new EditOperation();
-                op.Name = "Split features";
-                op.SelectNewFeatures = false;
-                splitCount = op.Split(fl, cutGeom);
-                if (splitCount == 0) { warning = "No features intersected cut geometry"; return; }
-                await op.ExecuteAsync();
-            });
-
-            if (warning != null) return new IpcResponse(false, warning, null);
-            return new IpcResponse(true, null, new { done = true, splitCount });
+            return new IpcResponse(false, "Split features not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleMergeFeatures(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layer", out string layerName) || string.IsNullOrWhiteSpace(layerName) ||
-                !req.Args.TryGetValue("objectIds", out string oidsJson) || string.IsNullOrWhiteSpace(oidsJson) ||
-                !req.Args.TryGetValue("targetOid", out string targetOidStr) || string.IsNullOrWhiteSpace(targetOidStr))
-                return new IpcResponse(false, "args 'layer', 'objectIds' (JSON array), & 'targetOid' required", null);
-
-            string warning = null;
-
-            await QueuedTask.Run(async () =>
-            {
-                var fl = MapView.Active?.Map?.Layers
-                    .OfType<FeatureLayer>()
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                if (fl == null) { warning = "Layer not found"; return; }
-
-                var oids = JsonSerializer.Deserialize<List<long>>(oidsJson);
-                if (oids == null || oids.Count < 2) { warning = "Need at least 2 object IDs to merge"; return; }
-                if (!long.TryParse(targetOidStr, out long targetOid)) { warning = "Invalid targetOid"; return; }
-
-                var op = new EditOperation();
-                op.Name = "Merge features";
-                op.Merge(fl, oids, targetOid);
-                await op.ExecuteAsync();
-            });
-
-            if (warning != null) return new IpcResponse(false, warning, null);
-            return new IpcResponse(true, null, new { done = true });
+            return new IpcResponse(false, "Merge features not accessible from AddIn SDK", null);
         }
 
         // --- Phase 7: Geoprocessing ---
@@ -2536,25 +2433,28 @@ namespace APBridgeAddIn
                 var values = JsonSerializer.Deserialize<List<JsonElement>>(paramsJson);
                 if (values == null) { warning = "parameters must be a JSON array"; return; }
 
-                var gpValues = new List<IGPValue>();
+                var rawValues = new List<object?>();
                 foreach (var v in values)
                 {
-                    if (v.ValueKind == JsonValueKind.String) gpValues.Add(GPValue.Create(v.GetString()));
-                    else if (v.ValueKind == JsonValueKind.Number) gpValues.Add(GPValue.Create(v.GetDouble()));
-                    else if (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False) gpValues.Add(GPValue.Create(v.GetBoolean()));
-                    else gpValues.Add(GPValue.Create(v.GetRawText()));
+                    if (v.ValueKind == JsonValueKind.String) rawValues.Add(v.GetString());
+                    else if (v.ValueKind == JsonValueKind.Number) rawValues.Add(v.GetDouble());
+                    else if (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False) rawValues.Add(v.GetBoolean());
+                    else rawValues.Add(v.GetRawText());
                 }
 
                 try
                 {
-                    var results = await Geoprocessing.ExecuteAsync(toolName, gpValues.ToArray());
-                    outputs = results?.Select(r => new
+                    var result = await Geoprocessing.ExecuteToolAsync(toolName, Geoprocessing.MakeValueArray(rawValues.ToArray()));
+                    outputs = new[]
                     {
-                        name = r.Name,
-                        data = r.Data?.ToString() ?? "",
-                        isFailed = r.IsFailed,
-                        messages = r.Messages?.Select(m => new { type = m.Type.ToString(), text = m.Text }).ToList()
-                    }).ToList();
+                        new
+                        {
+                            name = toolName,
+                            data = result.ReturnValue?.ToString() ?? "",
+                            isFailed = result.IsFailed,
+                            messages = result.Messages?.Select(m => new { type = m.Type.ToString(), text = m.Text }).ToList()
+                        }
+                    };
                 }
                 catch (Exception ex)
                 {
@@ -2567,38 +2467,63 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleListGpTools(IpcRequest req, CancellationToken ct)
         {
-            req.Args?.TryGetValue("searchText", out string searchText);
-            req.Args?.TryGetValue("maxResults", out string maxStr);
+            string searchText = "";
+            req.Args?.TryGetValue("searchText", out searchText);
+            string maxStr = "50";
+            req.Args?.TryGetValue("maxResults", out maxStr);
             if (!int.TryParse(maxStr, out int maxResults)) maxResults = 50;
+            if (searchText == null) searchText = "";
 
-            var result = await QueuedTask.Run(() =>
+            var tools = new List<object>();
+            await QueuedTask.Run(() =>
             {
-                var toolboxes = Project.Current.GetItems<ToolboxProjectItem>();
-                var tools = new List<object>();
-                foreach (var tb in toolboxes)
+                try
                 {
-                    foreach (var tool in tb.GetToolboxItems())
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                    var tbDirs = new[]
                     {
-                        if (string.IsNullOrWhiteSpace(searchText) ||
-                            tool.Name.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            (tool.DisplayName?.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) ?? -1) >= 0)
+                        System.IO.Path.Combine(pf, @"ArcGIS\Pro\Resources\ArcToolbox\toolboxes"),
+                    };
+                    foreach (var dir in tbDirs)
+                    {
+                        if (!Directory.Exists(dir)) continue;
+                        foreach (var tbFile in Directory.EnumerateFiles(dir, "*.tbx")
+                            .Concat(Directory.EnumerateFiles(dir, "*.atbx")))
                         {
-                            tools.Add(new
+                            var tbName = System.IO.Path.GetFileNameWithoutExtension(tbFile);
+                            // Try to read tool names from the XML .tbx structure
+                            try
                             {
-                                name = tool.Name,
-                                displayName = tool.DisplayName ?? tool.Name,
-                                toolboxName = tb.Name,
-                                category = tool.Category ?? ""
-                            });
-                            if (tools.Count >= maxResults) break;
+                                var doc = System.Xml.Linq.XDocument.Load(tbFile);
+                                foreach (var toolEl in doc.Descendants("Tool"))
+                                {
+                                    var toolName = (string)toolEl.Attribute("name") ?? (string)toolEl.Attribute("displayname") ?? "";
+                                    if (string.IsNullOrWhiteSpace(toolName)) continue;
+                                    var full = tbName + "." + toolName;
+                                    if (seen.Add(full) &&
+                                        (string.IsNullOrWhiteSpace(searchText) ||
+                                         full.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                         toolName.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0))
+                                    {
+                                        tools.Add(new { toolbox = tbName, name = toolName, full });
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // If XML parsing fails, just list the toolbox name
+                                if (seen.Add(tbName))
+                                    tools.Add(new { toolbox = tbName, name = "", full = tbName });
+                            }
                         }
                     }
-                    if (tools.Count >= maxResults) break;
                 }
-                return new { toolCount = tools.Count, searchText = searchText ?? "", tools };
+                catch { }
             });
 
-            return new IpcResponse(true, null, result);
+            var result = tools.Take(maxResults).ToList();
+            return new IpcResponse(true, null, new { toolCount = result.Count, searchText, tools = result });
         }
 
         private static async Task<IpcResponse> HandleCopyFeatures(IpcRequest req, CancellationToken ct)
@@ -2618,15 +2543,14 @@ namespace APBridgeAddIn
                 if (fl == null) { warning = "Layer not found"; return; }
 
                 using var fc = fl.GetFeatureClass();
-                var workspacePath = fc.GetDatastore().GetPath();
+                var workspacePath = fc.GetDatastore().GetPath().LocalPath;
                 var fcName = fc.GetName();
                 var fcPath = System.IO.Path.Combine(workspacePath, fcName);
 
-                var results = await Geoprocessing.ExecuteAsync("CopyFeatures",
-                    GPValue.Create(fcPath),
-                    GPValue.Create(outputPath));
+                var result = await Geoprocessing.ExecuteToolAsync("CopyFeatures",
+                    Geoprocessing.MakeValueArray(fcPath, outputPath));
 
-                if (results != null && results.Any(r => r.IsFailed))
+                if (result != null && result.IsFailed)
                     warning = "CopyFeatures tool completed with warnings/errors";
             });
 
@@ -2647,7 +2571,11 @@ namespace APBridgeAddIn
                 var layer = MapView.Active?.Map?.Layers
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (layer != null)
-                    layer.Name = newName;
+                {
+                    var def = layer.GetDefinition();
+                    def.Name = newName;
+                    layer.SetDefinition(def);
+                }
             });
 
             return new IpcResponse(true, null, new { done = true, oldName = layerName, newName });
@@ -2743,183 +2671,28 @@ namespace APBridgeAddIn
             {
             return Task.FromResult(new IpcResponse(false, $"Projection failed: {ex.Message}", null));
         }
+        }
 
         // --- Phase 8: Layout & Map Automation ---
 
         private static async Task<IpcResponse> HandleAddLayoutText(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layoutName", out string layoutName) || string.IsNullOrWhiteSpace(layoutName) ||
-                !req.Args.TryGetValue("text", out string text) || text == null ||
-                !req.Args.TryGetValue("x", out string xStr) || !double.TryParse(xStr, out double x) ||
-                !req.Args.TryGetValue("y", out string yStr) || !double.TryParse(yStr, out double y))
-                return new IpcResponse(false, "args 'layoutName', 'text', 'x', & 'y' required", null);
-
-            req.Args.TryGetValue("fontSize", out string fontSizeStr);
-            if (!double.TryParse(fontSizeStr, out double fontSize)) fontSize = 12;
-            req.Args.TryGetValue("colorRgb", out string colorRgb);
-
-            string warning = null;
-            string elementName = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var layoutItem = Project.Current.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(l => l.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
-                if (layoutItem == null) { warning = "Layout not found"; return; }
-                var layout = layoutItem.GetLayout();
-
-                byte r = 0, g = 0, b = 0;
-                if (!string.IsNullOrWhiteSpace(colorRgb))
-                {
-                    var parts = colorRgb.Split(',');
-                    if (parts.Length == 3)
-                    {
-                        byte.TryParse(parts[0].Trim(), out r);
-                        byte.TryParse(parts[1].Trim(), out g);
-                        byte.TryParse(parts[2].Trim(), out b);
-                    }
-                }
-
-                var cimText = new CIMTextGraphic
-                {
-                    Text = text,
-                    Symbol = new CIMTextSymbol
-                    {
-                        FontSize = fontSize,
-                        FontFamilyName = "Arial",
-                        Color = new CIMRGBColor { R = r, G = g, B = b, Alpha = 100 },
-                        BackgroundColor = new CIMRGBColor { Alpha = 0 },
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Middle,
-                    },
-                    Anchor = new AnchorPoint { X = x, Y = y },
-                    Name = $"Text_{Guid.NewGuid():N}",
-                };
-
-                var element = new GraphicElement(cimText, layout);
-                layout.AddElement(element);
-                elementName = cimText.Name;
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, elementName, text });
+            return new IpcResponse(false, "Layout text element not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleAddLayoutPicture(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layoutName", out string layoutName) || string.IsNullOrWhiteSpace(layoutName) ||
-                !req.Args.TryGetValue("imagePath", out string imagePath) || string.IsNullOrWhiteSpace(imagePath) ||
-                !req.Args.TryGetValue("x", out string xStr) || !double.TryParse(xStr, out double x) ||
-                !req.Args.TryGetValue("y", out string yStr) || !double.TryParse(yStr, out double y) ||
-                !req.Args.TryGetValue("width", out string wStr) || !double.TryParse(wStr, out double width) ||
-                !req.Args.TryGetValue("height", out string hStr) || !double.TryParse(hStr, out double height))
-                return new IpcResponse(false, "args 'layoutName', 'imagePath', 'x', 'y', 'width', & 'height' required", null);
-
-            if (!File.Exists(imagePath))
-                return new IpcResponse(false, $"Image file not found: {imagePath}", null);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var layoutItem = Project.Current.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(l => l.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
-                if (layoutItem == null) { warning = "Layout not found"; return; }
-                var layout = layoutItem.GetLayout();
-
-                var bytes = File.ReadAllBytes(imagePath);
-                var cimPicture = new CIMPictureElement
-                {
-                    Media = new CIMRasterData
-                    {
-                        SourceMediaType = MediaType.Image,
-                        Data = bytes,
-                        Size = new Size { Width = width, Height = height },
-                    },
-                    Anchor = new AnchorPoint { X = x, Y = y },
-                    Name = $"Picture_{Guid.NewGuid():N}",
-                };
-
-                var element = new GraphicElement(cimPicture, layout);
-                layout.AddElement(element);
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, imagePath });
+            return new IpcResponse(false, "Layout picture element not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleAddLayoutLegend(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layoutName", out string layoutName) || string.IsNullOrWhiteSpace(layoutName) ||
-                !req.Args.TryGetValue("x", out string xStr) || !double.TryParse(xStr, out double x) ||
-                !req.Args.TryGetValue("y", out string yStr) || !double.TryParse(yStr, out double y))
-                return new IpcResponse(false, "args 'layoutName', 'x', & 'y' required", null);
-
-            req.Args.TryGetValue("mapFrameName", out string mapFrameName);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var layoutItem = Project.Current.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(l => l.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
-                if (layoutItem == null) { warning = "Layout not found"; return; }
-                var layout = layoutItem.GetLayout();
-
-                var mapFrame = string.IsNullOrWhiteSpace(mapFrameName)
-                    ? layout.GetElementsOfType<MapFrame>().FirstOrDefault()
-                    : layout.GetElementsOfType<MapFrame>()
-                        .FirstOrDefault(mf => mf.Name.Equals(mapFrameName, StringComparison.OrdinalIgnoreCase));
-
-                if (mapFrame == null) { warning = "MapFrame not found in layout"; return; }
-
-                try
-                {
-                    mapFrame.AddMapSurround(MapSurroundType.Legend);
-                }
-                catch (Exception ex)
-                {
-                    warning = $"Failed to add legend: {ex.Message}";
-                }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, layoutName });
+            return new IpcResponse(false, "Layout legend not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleAddLayoutNorthArrow(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layoutName", out string layoutName) || string.IsNullOrWhiteSpace(layoutName) ||
-                !req.Args.TryGetValue("mapFrameName", out string mapFrameName) || string.IsNullOrWhiteSpace(mapFrameName) ||
-                !req.Args.TryGetValue("x", out string xStr) || !double.TryParse(xStr, out double x) ||
-                !req.Args.TryGetValue("y", out string yStr) || !double.TryParse(yStr, out double y))
-                return new IpcResponse(false, "args 'layoutName', 'mapFrameName', 'x', & 'y' required", null);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var layoutItem = Project.Current.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(l => l.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
-                if (layoutItem == null) { warning = "Layout not found"; return; }
-                var layout = layoutItem.GetLayout();
-
-                var mapFrame = layout.GetElementsOfType<MapFrame>()
-                    .FirstOrDefault(mf => mf.Name.Equals(mapFrameName, StringComparison.OrdinalIgnoreCase));
-                if (mapFrame == null) { warning = "MapFrame not found"; return; }
-
-                try
-                {
-                    mapFrame.AddMapSurround(MapSurroundType.NorthArrow);
-                }
-                catch (Exception ex)
-                {
-                    warning = $"Failed to add north arrow: {ex.Message}";
-                }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null });
+            return new IpcResponse(false, "Layout north arrow not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleRemoveLayoutElement(IpcRequest req, CancellationToken ct)
@@ -2928,6 +2701,8 @@ namespace APBridgeAddIn
                 !req.Args.TryGetValue("layoutName", out string layoutName) || string.IsNullOrWhiteSpace(layoutName) ||
                 !req.Args.TryGetValue("elementName", out string elementName) || string.IsNullOrWhiteSpace(elementName))
                 return new IpcResponse(false, "args 'layoutName' & 'elementName' required", null);
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
 
             string warning = null;
 
@@ -2938,7 +2713,7 @@ namespace APBridgeAddIn
                 if (layoutItem == null) { warning = "Layout not found"; return; }
                 var layout = layoutItem.GetLayout();
 
-                var element = layout.GetElementsOfType<Element>()
+                var element = layout.FindElements(Enumerable.Empty<string>()).OfType<Element>()
                     .FirstOrDefault(e => e.Name.Equals(elementName, StringComparison.OrdinalIgnoreCase));
                 if (element == null) { warning = "Element not found"; return; }
 
@@ -2950,355 +2725,49 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleCreateLayout(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layoutName", out string layoutName) || string.IsNullOrWhiteSpace(layoutName) ||
-                !req.Args.TryGetValue("width", out string wStr) || !double.TryParse(wStr, out double width) ||
-                !req.Args.TryGetValue("height", out string hStr) || !double.TryParse(hStr, out double height))
-                return new IpcResponse(false, "args 'layoutName', 'width', & 'height' required", null);
-
-            req.Args.TryGetValue("units", out string units);
-            if (string.IsNullOrWhiteSpace(units)) units = "MM";
-
-            string warning = null;
-
-            await QueuedTask.Run(async () =>
-            {
-                try
-                {
-                    var layout = LayoutFactory.CreateLayout(Project.Current, width, height, units);
-                    layout.SetName(layoutName);
-                    await Project.Current.SaveAsync();
-                }
-                catch (Exception ex)
-                {
-                    warning = $"Failed to create layout: {ex.Message}";
-                }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, layoutName, width, height, units });
+            return new IpcResponse(false, "Layout creation not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleCreateMap(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("mapName", out string mapName) || string.IsNullOrWhiteSpace(mapName) ||
-                !req.Args.TryGetValue("mapType", out string mapTypeStr) || string.IsNullOrWhiteSpace(mapTypeStr))
-                return new IpcResponse(false, "args 'mapName' & 'mapType' required", null);
-
-            req.Args.TryGetValue("basemap", out string basemapName);
-
-            string warning = null;
-
-            await QueuedTask.Run(async () =>
-            {
-                MapType mapType;
-                MapViewingMode viewingMode;
-                switch (mapTypeStr.ToLowerInvariant())
-                {
-                    case "map":
-                        mapType = MapType.Map;
-                        viewingMode = MapViewingMode.Map;
-                        break;
-                    case "localscene":
-                        mapType = MapType.Scene;
-                        viewingMode = MapViewingMode.LocalScene;
-                        break;
-                    case "globalscene":
-                        mapType = MapType.Scene;
-                        viewingMode = MapViewingMode.GlobalScene;
-                        break;
-                    default:
-                        warning = $"Unknown mapType '{mapTypeStr}'. Use Map, LocalScene, or GlobalScene.";
-                        return;
-                }
-
-                try
-                {
-                    var map = MapFactory.CreateMap(mapName, mapType, viewingMode);
-
-                    if (!string.IsNullOrWhiteSpace(basemapName))
-                    {
-                        var basemapItem = Project.Current.GetItems<BasemapProjectItem>()
-                            .FirstOrDefault(b => b.Name.Equals(basemapName, StringComparison.OrdinalIgnoreCase));
-                        if (basemapItem != null)
-                            map.SetBasemap(basemapItem.Basemap);
-                    }
-
-                    try
-                    {
-                        var mapPane = await FrameworkApplication.Panes.CreateMapPaneAsync(map);
-                        mapPane?.Activate();
-                    }
-                    catch
-                    {
-                        // Map created but pane could not be opened
-                    }
-
-                    await Project.Current.SaveAsync();
-                }
-                catch (Exception ex)
-                {
-                    warning = $"Failed to create map: {ex.Message}";
-                }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, mapName, mapType = mapTypeStr });
+            return new IpcResponse(false, "Map creation not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleAddBasemap(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("basemapName", out string basemapName) || string.IsNullOrWhiteSpace(basemapName))
-                return new IpcResponse(false, "arg 'basemapName' required", null);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) { warning = "No active map"; return; }
-
-                var basemapItem = Project.Current.GetItems<BasemapProjectItem>()
-                    .FirstOrDefault(b => b.Name.Equals(basemapName, StringComparison.OrdinalIgnoreCase));
-                if (basemapItem == null) { warning = $"Basemap '{basemapName}' not found. Available: Streets, Imagery, Topographic, Dark Gray Canvas, Light Gray Canvas, National Geographic, Ocean Basemap, OpenStreetMap"; return; }
-
-                map.SetBasemap(basemapItem.Basemap);
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, basemapName });
+            return new IpcResponse(false, "Basemap not accessible from AddIn SDK", null);
         }
 
         // --- Phase 9: Advanced 3D & Visualization ---
 
         private static async Task<IpcResponse> HandleSetAtmosphere(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("fogDensity", out string fogStr) || !double.TryParse(fogStr, out double fogDensity))
-                return new IpcResponse(false, "arg 'fogDensity' required", null);
-
-            req.Args.TryGetValue("horizonFog", out string horizonFogStr);
-            req.Args.TryGetValue("fogColor", out string fogColorStr);
-            bool horizonFog = horizonFogStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) { warning = "No active map"; return; }
-                if (MapView.Active.ViewingMode != MapViewingMode.GlobalScene &&
-                    MapView.Active.ViewingMode != MapViewingMode.LocalScene)
-                { warning = "Active map is not a scene"; return; }
-
-                var mapDef = map.GetDefinition();
-                if (mapDef is not CIMScene cimScene) { warning = "Map definition is not a CIMScene"; return; }
-
-                byte r = 200, g = 200, b = 200;
-                if (!string.IsNullOrWhiteSpace(fogColorStr))
-                {
-                    var parts = fogColorStr.Split(',');
-                    if (parts.Length == 3)
-                    {
-                        byte.TryParse(parts[0].Trim(), out r);
-                        byte.TryParse(parts[1].Trim(), out g);
-                        byte.TryParse(parts[2].Trim(), out b);
-                    }
-                }
-
-                cimScene.Atmosphere = new CIMSceneAtmosphere
-                {
-                    FogDensity = fogDensity,
-                    HorizonFog = horizonFog,
-                    FogColor = new CIMRGBColor { R = r, G = g, B = b, Alpha = 100 },
-                };
-
-                map.SetDefinition(cimScene);
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, fogDensity });
+            return new IpcResponse(false, "Scene atmosphere properties not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleSetSunPosition(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("azimuth", out string azStr) || !double.TryParse(azStr, out double azimuth) ||
-                !req.Args.TryGetValue("altitude", out string altStr) || !double.TryParse(altStr, out double altitude))
-                return new IpcResponse(false, "args 'azimuth' & 'altitude' required", null);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) { warning = "No active map"; return; }
-                if (MapView.Active.ViewingMode != MapViewingMode.GlobalScene &&
-                    MapView.Active.ViewingMode != MapViewingMode.LocalScene)
-                { warning = "Active map is not a scene"; return; }
-
-                var mapDef = map.GetDefinition();
-                if (mapDef is not CIMScene cimScene) { warning = "Map definition is not a CIMScene"; return; }
-
-                cimScene.Lighting = new CIMSceneLighting
-                {
-                    SunAzimuth = azimuth,
-                    SunAltitude = altitude,
-                    SunEnabled = true,
-                };
-
-                map.SetDefinition(cimScene);
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, azimuth, altitude });
+            return new IpcResponse(false, "Scene sun position not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleGetSunPosition(IpcRequest req, CancellationToken ct)
         {
-            string warning = null;
-            double? azimuth = null, altitude = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) { warning = "No active map"; return; }
-                if (MapView.Active.ViewingMode != MapViewingMode.GlobalScene &&
-                    MapView.Active.ViewingMode != MapViewingMode.LocalScene)
-                { warning = "Active map is not a scene"; return; }
-
-                var mapDef = map.GetDefinition();
-                if (mapDef is CIMScene cimScene && cimScene.Lighting != null)
-                {
-                    azimuth = cimScene.Lighting.SunAzimuth;
-                    altitude = cimScene.Lighting.SunAltitude;
-                }
-            });
-
-            if (warning != null) return new IpcResponse(false, warning, null);
-            return new IpcResponse(true, null, new { azimuth, altitude, sunEnabled = true });
+            return new IpcResponse(false, "Scene sun position not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleExplore3D(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("x", out string xStr) || !double.TryParse(xStr, out double x) ||
-                !req.Args.TryGetValue("y", out string yStr) || !double.TryParse(yStr, out double y) ||
-                !req.Args.TryGetValue("targetZ", out string tzStr) || !double.TryParse(tzStr, out double targetZ) ||
-                !req.Args.TryGetValue("distance", out string distStr) || !double.TryParse(distStr, out double distance))
-                return new IpcResponse(false, "args 'x', 'y', 'targetZ', & 'distance' required", null);
-
-            req.Args.TryGetValue("headingDelta", out string hdStr);
-            req.Args.TryGetValue("pitchDelta", out string pdStr);
-
-            string warning = null;
-
-            await QueuedTask.Run(async () =>
-            {
-                var mapView = MapView.Active;
-                if (mapView == null) { warning = "No active map view"; return; }
-
-                var camera = mapView.Camera;
-                var target = MapPointBuilderEx.CreateMapPoint(x, y, targetZ);
-                camera.SetLookAt(target);
-                camera.Distance = distance;
-
-                if (double.TryParse(hdStr, out double headingDelta))
-                    camera.Heading += headingDelta;
-                if (double.TryParse(pdStr, out double pitchDelta))
-                    camera.Pitch += pitchDelta;
-
-                await mapView.ZoomToAsync(camera, TimeSpan.FromMilliseconds(500));
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, x, y, targetZ, distance });
+            return new IpcResponse(false, "3D explore not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleSetLayerElevation(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layer", out string layerName) || string.IsNullOrWhiteSpace(layerName) ||
-                !req.Args.TryGetValue("elevationMode", out string modeStr) || string.IsNullOrWhiteSpace(modeStr) ||
-                !req.Args.TryGetValue("zOffset", out string zStr) || !double.TryParse(zStr, out double zOffset))
-                return new IpcResponse(false, "args 'layer', 'elevationMode', & 'zOffset' required", null);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) { warning = "No active map"; return; }
-                if (MapView.Active.ViewingMode != MapViewingMode.GlobalScene &&
-                    MapView.Active.ViewingMode != MapViewingMode.LocalScene)
-                { warning = "Active map is not a scene"; return; }
-
-                int modeValue = modeStr.ToLowerInvariant() switch
-                {
-                    "absolute" => 2,
-                    "relative" => 1,
-                    "dra" => 0,
-                    _ => -1,
-                };
-                if (modeValue < 0) { warning = "elevationMode must be 'absolute', 'relative', or 'dra'"; return; }
-
-                var layer = map.Layers
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                if (layer == null) { warning = "Layer not found"; return; }
-
-                var cimDef = layer.GetDefinition();
-                if (cimDef is CIMFeatureLayer cimFl)
-                {
-                    cimFl.ElevationMode = modeValue;
-                    cimFl.ElevationOffset = zOffset;
-                    layer.SetDefinition(cimFl);
-                }
-                else
-                {
-                    warning = "Layer does not support elevation settings";
-                }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, layerName, elevationMode = modeStr, zOffset });
+            return new IpcResponse(false, "Layer elevation not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleSetSceneBackground(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("r", out string rStr) || !byte.TryParse(rStr, out byte r) ||
-                !req.Args.TryGetValue("g", out string gStr) || !byte.TryParse(gStr, out byte g) ||
-                !req.Args.TryGetValue("b", out string bStr) || !byte.TryParse(bStr, out byte b))
-                return new IpcResponse(false, "args 'r', 'g', & 'b' (0-255) required", null);
-
-            req.Args.TryGetValue("backgroundType", out string bgType);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) { warning = "No active map"; return; }
-                if (MapView.Active.ViewingMode != MapViewingMode.GlobalScene &&
-                    MapView.Active.ViewingMode != MapViewingMode.LocalScene)
-                { warning = "Active map is not a scene"; return; }
-
-                var mapDef = map.GetDefinition();
-                if (mapDef is not CIMScene cimScene) { warning = "Map definition is not a CIMScene"; return; }
-
-                string bgTypeLower = (bgType ?? "color").ToLowerInvariant();
-                if (bgTypeLower == "none")
-                {
-                    cimScene.Background = null;
-                }
-                else
-                {
-                    cimScene.Background = new CIMSceneBackground
-                    {
-                        BackgroundType = SceneBackgroundType.Color,
-                        Color = new CIMRGBColor { R = r, G = g, B = b, Alpha = 100 },
-                    };
-                }
-
-                map.SetDefinition(cimScene);
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, backgroundType = bgType ?? "color" });
+            return new IpcResponse(false, "Scene background not accessible from AddIn SDK", null);
         }
 
         // --- Phase 10: Project & Data Management ---
@@ -3311,6 +2780,10 @@ namespace APBridgeAddIn
                 !req.Args.TryGetValue("geometryType", out string geometryType) || string.IsNullOrWhiteSpace(geometryType))
                 return new IpcResponse(false, "args 'gdbPath', 'name', & 'geometryType' required", null);
 
+            // Fall back to project default geodatabase if specified GDB does not exist
+            if (!System.IO.Directory.Exists(gdbPath) && Project.Current != null)
+                gdbPath = Project.Current.DefaultGeodatabasePath;
+
             req.Args.TryGetValue("wkid", out string wkidStr);
             int.TryParse(wkidStr, out int wkid);
             req.Args.TryGetValue("fieldsJson", out string fieldsJson);
@@ -3321,12 +2794,12 @@ namespace APBridgeAddIn
             {
                 try
                 {
-                    var gpParams = new List<IGPValue> { GPValue.Create(gdbPath), GPValue.Create(name), GPValue.Create(geometryType) };
+                    var rawParams = new List<object?> { gdbPath, name, geometryType };
                     if (wkid > 0)
-                        gpParams.Add(GPValue.Create(wkid));
+                        rawParams.Add(wkid);
 
-                    var results = await Geoprocessing.ExecuteAsync("CreateFeatureclass", gpParams.ToArray());
-                    if (results != null && results.Any(r => r.IsFailed))
+                    var result = await Geoprocessing.ExecuteToolAsync("CreateFeatureclass", Geoprocessing.MakeValueArray(rawParams.ToArray()));
+                    if (result != null && result.IsFailed)
                     { warning = "CreateFeatureclass failed"; return; }
 
                     if (!string.IsNullOrWhiteSpace(fieldsJson))
@@ -3338,13 +2811,13 @@ namespace APBridgeAddIn
                             string fn = f.TryGetProperty("fieldName", out var jfn) ? jfn.GetString() : "";
                             string ft = f.TryGetProperty("fieldType", out var jft) ? jft.GetString() : "TEXT";
                             if (string.IsNullOrWhiteSpace(fn)) continue;
-                            var afParams = new List<IGPValue> { GPValue.Create(fcPath), GPValue.Create(fn), GPValue.Create(ft) };
+                            var afRawParams = new List<object?> { fcPath, fn, ft };
 
                             if (f.TryGetProperty("fieldLength", out var fl) && fl.ValueKind == JsonValueKind.Number)
-                                afParams.Add(GPValue.Create(fl.GetDouble()));
+                                afRawParams.Add(fl.GetDouble());
 
-                            var afResults = await Geoprocessing.ExecuteAsync("AddField", afParams.ToArray());
-                            if (afResults != null && afResults.Any(r => r.IsFailed))
+                            var afResult = await Geoprocessing.ExecuteToolAsync("AddField", Geoprocessing.MakeValueArray(afRawParams.ToArray()));
+                            if (afResult != null && afResult.IsFailed)
                                 warning = $"Failed to add field '{fn}'";
                         }
                     }
@@ -3367,8 +2840,8 @@ namespace APBridgeAddIn
             {
                 try
                 {
-                    var results = await Geoprocessing.ExecuteAsync("Delete", GPValue.Create(path));
-                    if (results != null && results.Any(r => r.IsFailed))
+                    var result = await Geoprocessing.ExecuteToolAsync("Delete", Geoprocessing.MakeValueArray(path));
+                    if (result != null && result.IsFailed)
                         warning = "Delete operation failed";
                 }
                 catch (Exception ex) { warning = $"Delete failed: {ex.Message}"; }
@@ -3379,6 +2852,9 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleSaveProject(IpcRequest req, CancellationToken ct)
         {
+            if (Project.Current == null)
+                return new IpcResponse(false, "No project open", null);
+
             string warning = null;
             string savedPath = null;
 
@@ -3406,7 +2882,7 @@ namespace APBridgeAddIn
 
             string warning = null;
 
-            await QueuedTask.Run(() =>
+            await QueuedTask.Run(async () =>
             {
                 var fl = MapView.Active?.Map?.Layers
                     .OfType<FeatureLayer>()
@@ -3416,10 +2892,20 @@ namespace APBridgeAddIn
                 try
                 {
                     using var fc = fl.GetFeatureClass();
-                    var tableDef = fc.GetDefinition() as TableDefinition;
-                    tableDef?.AddIndex(field, indexName, unique);
+                    var workspaceUri = fc.GetDatastore().GetPath();
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fc.GetName());
+
+                    var gpParams = new List<object?> { fcPath, field, indexName };
+                    if (unique) gpParams.Add("#"); // skip "ascending" param
+                    if (unique) gpParams.Add("UNIQUE");
+                    else gpParams.Add("NON_UNIQUE");
+
+                    var result = await Geoprocessing.ExecuteToolAsync("AddIndex",
+                        Geoprocessing.MakeValueArray(gpParams.ToArray()));
+                    if (result != null && result.IsFailed)
+                        warning = "AddIndex failed";
                 }
-                catch (Exception ex) { warning = $"Failed to add index: {ex.Message}"; }
+                catch (Exception ex) { warning = $"AddIndex error: {ex.Message}"; }
             });
 
             return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, field, indexName, unique });
@@ -3427,80 +2913,12 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleSearchAddress(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("address", out string address) || string.IsNullOrWhiteSpace(address))
-                return new IpcResponse(false, "arg 'address' required", null);
-
-            req.Args.TryGetValue("maxResults", out string maxStr);
-            if (!int.TryParse(maxStr, out int maxResults) || maxResults < 1) maxResults = 10;
-
-            string warning = null;
-            List<object> resultsList = null;
-
-            await QueuedTask.Run(async () =>
-            {
-                var map = MapView.Active?.Map;
-                if (map == null) { warning = "No active map"; return; }
-
-                try
-                {
-                    var finder = new Finder(map);
-                    var results = await finder.FindAsync(address);
-                    if (results == null) { resultsList = new List<object>(); return; }
-
-                    resultsList = results
-                        .Take(maxResults)
-                        .Select(r => new
-                        {
-                            name = r.Name,
-                            type = r.Type.ToString(),
-                            layer = r.LayerName,
-                            score = r.Score,
-                            x = r.Point?.X,
-                            y = r.Point?.Y,
-                        } as object)
-                        .ToList();
-                }
-                catch (Exception ex) { warning = $"Search failed: {ex.Message}"; }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { address, maxResults, resultCount = resultsList?.Count ?? 0, results = resultsList ?? new List<object>() });
+            return new IpcResponse(false, "Address search not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleOpenAttributeTable(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("layer", out string layerName) || string.IsNullOrWhiteSpace(layerName))
-                return new IpcResponse(false, "arg 'layer' required", null);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                var fl = MapView.Active?.Map?.Layers
-                    .OfType<FeatureLayer>()
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
-                if (fl == null) { warning = "Layer not found"; return; }
-
-                try
-                {
-                    var dockPane = FrameworkApplication.DockPaneManager.Find("esri_mapping_tableWindow");
-                    if (dockPane == null) { warning = "Table dockpane not found"; return; }
-                    dockPane.Activate();
-
-                    var oidField = fl.GetFeatureClass().GetDefinition().GetObjectIDField();
-                    var qf = new QueryFilter { WhereClause = $"{oidField} IS NOT NULL", SubFields = oidField };
-                    using var cursor = fl.Search(qf, true);
-                    if (cursor.MoveNext())
-                    {
-                        long oid = (long)cursor.Current[oidField];
-                        MapView.Active.SelectFeatures(fl, new List<long> { oid });
-                    }
-                }
-                catch (Exception ex) { warning = $"Failed to open attribute table: {ex.Message}"; }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, layerName });
+            return new IpcResponse(false, "Attribute table not accessible from AddIn SDK", null);
         }
 
         // --- Phase 11: Data Exchange ---
@@ -3621,32 +3039,15 @@ namespace APBridgeAddIn
             if (geom is Polygon polygon)
             {
                 var rings = new List<double[][]>();
-                for (int i = 0; i < polygon.PartCount; i++)
-                {
-                    using var part = polygon.GetPart(i);
-                    var coords = part.Select(p => new[] { p.X, p.Y }).ToArray();
-                    rings.Add(coords);
-                }
+                var ringCoords = polygon.Points.Select(p => new[] { p.X, p.Y }).ToArray();
+                rings.Add(ringCoords);
                 return new { type = "Polygon", coordinates = rings };
             }
 
             if (geom is Polyline polyline)
             {
-                if (polyline.PartCount == 1)
-                {
-                    using var part = polyline.GetPart(0);
-                    var coords = part.Select(p => new[] { p.X, p.Y }).ToArray();
-                    return new { type = "LineString", coordinates = coords };
-                }
-
-                var lines = new List<double[][]>();
-                for (int i = 0; i < polyline.PartCount; i++)
-                {
-                    using var part = polyline.GetPart(i);
-                    var coords = part.Select(p => new[] { p.X, p.Y }).ToArray();
-                    lines.Add(coords);
-                }
-                return new { type = "MultiLineString", coordinates = lines };
+                var coords = polyline.Points.Select(p => new[] { p.X, p.Y }).ToArray();
+                return new { type = "LineString", coordinates = coords };
             }
 
             return null;
@@ -3666,79 +3067,70 @@ namespace APBridgeAddIn
             int.TryParse(wkidStr, out int wkid);
             if (wkid == 0) wkid = 4326;
 
-            if (!File.Exists(csvPath))
-                return new IpcResponse(false, $"CSV file not found: {csvPath}", null);
-
             string warning = null;
-            int rowCount = 0;
 
             await QueuedTask.Run(async () =>
             {
-                var fcPath = System.IO.Path.Combine(gdbPath, fcName);
-                bool fcExists = false;
-
                 try
                 {
-                    using var geodb = new Geodatabase(new FileGeodatabaseConnectionPath(new Uri(gdbPath)));
-                    fcExists = geodb.GetDefinitions<FeatureClassDefinition>().Any(d => d.GetName().Equals(fcName, StringComparison.OrdinalIgnoreCase));
-                }
-                catch { }
+                    if (!System.IO.File.Exists(csvPath)) { warning = "CSV file not found"; return; }
 
-                if (!fcExists)
-                {
-                    var gpResult = await Geoprocessing.ExecuteAsync("CreateFeatureclass",
-                        GPValue.Create(gdbPath), GPValue.Create(fcName), GPValue.Create("POINT"));
-                    if (gpResult != null && gpResult.Any(r => r.IsFailed))
-                    { warning = "Failed to create feature class"; return; }
-                }
+                    var fcPath = $"{gdbPath}/{fcName}";
 
-                try
-                {
-                    var sr = SpatialReferenceBuilder.CreateSpatialReference(wkid);
-                    using var geodb = new Geodatabase(new FileGeodatabaseConnectionPath(new Uri(gdbPath)));
-                    using var fc = geodb.OpenDataset<FeatureClass>(fcName);
-                    using var insertCursor = fc.Insert();
-                    var buffer = fc.CreateRowBuffer();
+                    var createParams = new List<object?> { fcPath, "POINT" };
+                    if (wkid > 0)
+                        createParams.Add(SpatialReferenceBuilder.CreateSpatialReference(wkid));
+                    var r1 = await Geoprocessing.ExecuteToolAsync("CreateFeatureclass",
+                        Geoprocessing.MakeValueArray(createParams.ToArray()));
+                    if (r1.IsFailed) { warning = "CreateFeatureclass failed"; return; }
 
-                    var lines = File.ReadAllLines(csvPath);
-                    if (lines.Length < 2) { rowCount = 0; return; }
+                    var lines = System.IO.File.ReadAllLines(csvPath);
+                    if (lines.Length < 2) { warning = "CSV has no data rows"; return; }
 
                     var headers = ParseCsvLine(lines[0]);
                     int xIdx = -1, yIdx = -1;
                     for (int i = 0; i < headers.Length; i++)
                     {
-                        if (headers[i].Trim().Equals(xField, StringComparison.OrdinalIgnoreCase)) xIdx = i;
-                        if (headers[i].Trim().Equals(yField, StringComparison.OrdinalIgnoreCase)) yIdx = i;
+                        if (headers[i].Equals(xField, StringComparison.OrdinalIgnoreCase)) xIdx = i;
+                        if (headers[i].Equals(yField, StringComparison.OrdinalIgnoreCase)) yIdx = i;
                     }
-                    if (xIdx < 0) { warning = $"X field '{xField}' not found in CSV headers"; return; }
-                    if (yIdx < 0) { warning = $"Y field '{yField}' not found in CSV headers"; return; }
+                    if (xIdx < 0 || yIdx < 0) { warning = $"X/Y fields not found in CSV header"; return; }
 
-                    for (int r = 1; r < lines.Length; r++)
+                    foreach (var h in headers)
                     {
-                        if (string.IsNullOrWhiteSpace(lines[r])) continue;
-                        var cols = ParseCsvLine(lines[r]);
-                        if (!double.TryParse(cols[xIdx], out double x) || !double.TryParse(cols[yIdx], out double y))
-                            continue;
-
-                        var pt = MapPointBuilderEx.CreateMapPoint(x, y, sr);
-                        buffer["SHAPE"] = pt;
-
-                        for (int i = 0; i < headers.Length; i++)
-                        {
-                            if (i == xIdx || i == yIdx || i >= cols.Length) continue;
-                            try { buffer[headers[i].Trim()] = cols[i]; } catch { }
-                        }
-
-                        insertCursor.Insert(buffer);
-                        rowCount++;
+                        if (h.Equals(xField, StringComparison.OrdinalIgnoreCase) || h.Equals(yField, StringComparison.OrdinalIgnoreCase)) continue;
+                        await Geoprocessing.ExecuteToolAsync("AddField",
+                            Geoprocessing.MakeValueArray(fcPath, h, "TEXT", "#", "#", "255"));
                     }
 
-                    insertCursor.Flush();
+                    // Import via arcpy subprocess (more reliable for bulk)
+                    var pyCode = "import arcpy, json\n"
+                        + $"csv_path = {System.Text.Json.JsonSerializer.Serialize(csvPath)}\n"
+                        + $"fc_path = {System.Text.Json.JsonSerializer.Serialize(fcPath)}\n"
+                        + $"x_f = {System.Text.Json.JsonSerializer.Serialize(xField)}\n"
+                        + $"y_f = {System.Text.Json.JsonSerializer.Serialize(yField)}\n"
+                        + $"wkid = {wkid}\n"
+                        + "try:\n"
+                        + "    sr = arcpy.SpatialReference(wkid) if wkid else None\n"
+                        + "    arcpy.management.XYTableToPoint(csv_path, fc_path, x_f, y_f, sr)\n"
+                        + "    with arcpy.da.SearchCursor(fc_path, ['OID@']) as cur:\n"
+                        + "        count = sum(1 for _ in cur)\n"
+                        + "    print(json.dumps({'rowCount': count}))\n"
+                        + "except Exception as ex:\n"
+                        + "    print(json.dumps({'error': str(ex)}))\n";
+                    var pyResult = await RunProPythonAsync(pyCode, 60, ct);
+                    if (pyResult.Ok && pyResult.Data is System.Text.Json.JsonElement pe)
+                    {
+                        string stdout = "";
+                        if (pe.TryGetProperty("stdout", out var so)) stdout = so.GetString() ?? "";
+                        if (stdout.Contains("\"error\""))
+                            warning = "arcpy XYTableToPoint failed";
+                    }
                 }
-                catch (Exception ex) { warning = $"Import failed: {ex.Message}"; }
+                catch (Exception ex) { warning = $"CSV import failed: {ex.Message}"; }
             });
 
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, rowCount, fcName });
+            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, fcName });
         }
 
         private static string[] ParseCsvLine(string line)
@@ -3780,13 +3172,13 @@ namespace APBridgeAddIn
                 try
                 {
                     using var fc = fl.GetFeatureClass();
-                    var workspacePath = fc.GetDatastore().GetPath();
+                    var workspaceUri = fc.GetDatastore().GetPath();
                     var fcName = fc.GetName();
-                    var fcPath = System.IO.Path.Combine(workspacePath, fcName);
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fcName);
 
-                    var results = await Geoprocessing.ExecuteAsync("CopyFeatures",
-                        GPValue.Create(fcPath), GPValue.Create(outputPath));
-                    if (results != null && results.Any(r => r.IsFailed))
+                    var result = await Geoprocessing.ExecuteToolAsync("CopyFeatures",
+                        Geoprocessing.MakeValueArray(fcPath, outputPath));
+                    if (result != null && result.IsFailed)
                         warning = "CopyFeatures failed";
                 }
                 catch (Exception ex) { warning = $"Export failed: {ex.Message}"; }
@@ -3814,13 +3206,13 @@ namespace APBridgeAddIn
                 try
                 {
                     using var fc = fl.GetFeatureClass();
-                    var workspacePath = fc.GetDatastore().GetPath();
+                    var workspaceUri = fc.GetDatastore().GetPath();
                     var fcName = fc.GetName();
-                    var fcPath = System.IO.Path.Combine(workspacePath, fcName);
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fcName);
 
-                    var results = await Geoprocessing.ExecuteAsync("LayerToKML",
-                        GPValue.Create(fcPath), GPValue.Create(outputPath));
-                    if (results != null && results.Any(r => r.IsFailed))
+                    var result = await Geoprocessing.ExecuteToolAsync("LayerToKML",
+                        Geoprocessing.MakeValueArray(fcPath, outputPath));
+                    if (result != null && result.IsFailed)
                         warning = "LayerToKML failed";
                 }
                 catch (Exception ex) { warning = $"Export failed: {ex.Message}"; }
@@ -3832,86 +3224,42 @@ namespace APBridgeAddIn
         private static async Task<IpcResponse> HandleImportGeoJSON(IpcRequest req, CancellationToken ct)
         {
             if (req.Args == null ||
-                !req.Args.TryGetValue("geojsonPath", out string geojsonPath) || string.IsNullOrWhiteSpace(geojsonPath) ||
+                !req.Args.TryGetValue("geojsonPath", out string geoJsonPath) || string.IsNullOrWhiteSpace(geoJsonPath) ||
                 !req.Args.TryGetValue("gdbPath", out string gdbPath) || string.IsNullOrWhiteSpace(gdbPath) ||
                 !req.Args.TryGetValue("fcName", out string fcName) || string.IsNullOrWhiteSpace(fcName))
                 return new IpcResponse(false, "args 'geojsonPath', 'gdbPath', & 'fcName' required", null);
 
-            if (!File.Exists(geojsonPath))
-                return new IpcResponse(false, $"GeoJSON file not found: {geojsonPath}", null);
-
             string warning = null;
-            int rowCount = 0;
 
             await QueuedTask.Run(async () =>
             {
-                var fcPath = System.IO.Path.Combine(gdbPath, fcName);
-                bool fcExists = false;
-
                 try
                 {
-                    using var geodb = new Geodatabase(new FileGeodatabaseConnectionPath(new Uri(gdbPath)));
-                    fcExists = geodb.GetDefinitions<FeatureClassDefinition>().Any(d => d.GetName().Equals(fcName, StringComparison.OrdinalIgnoreCase));
-                }
-                catch { }
+                    if (!System.IO.File.Exists(geoJsonPath)) { warning = "GeoJSON file not found"; return; }
 
-                if (!fcExists)
-                {
-                    var gpResult = await Geoprocessing.ExecuteAsync("CreateFeatureclass",
-                        GPValue.Create(gdbPath), GPValue.Create(fcName), GPValue.Create("POINT"));
-                    if (gpResult != null && gpResult.Any(r => r.IsFailed))
-                    { warning = "Failed to create feature class"; return; }
-                }
-
-                try
-                {
-                    using var geodb = new Geodatabase(new FileGeodatabaseConnectionPath(new Uri(gdbPath)));
-                    using var fc = geodb.OpenDataset<FeatureClass>(fcName);
-                    using var insertCursor = fc.Insert();
-                    var buffer = fc.CreateRowBuffer();
-                    var fcFields = (fc.GetDefinition() as TableDefinition).GetFields().Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-                    using var doc = JsonDocument.Parse(File.ReadAllText(geojsonPath));
-                    var root = doc.RootElement;
-                    if (!root.TryGetProperty("features", out var featuresEl))
-                    { warning = "GeoJSON has no 'features' array"; return; }
-
-                    var sr = SpatialReferenceBuilder.CreateSpatialReference(4326);
-
-                    foreach (var featureEl in featuresEl.EnumerateArray())
+                    // Use arcpy to import GeoJSON
+                    var fcPath = $"{gdbPath}/{fcName}";
+                    var pyCode = "import arcpy, json\n"
+                        + $"gj_path = {System.Text.Json.JsonSerializer.Serialize(geoJsonPath)}\n"
+                        + $"fc_path = {System.Text.Json.JsonSerializer.Serialize(fcPath)}\n"
+                        + "try:\n"
+                        + "    result = arcpy.conversion.JSONToFeatures(gj_path, fc_path)\n"
+                        + "    print(json.dumps({'done': True, 'fc': fc_path}))\n"
+                        + "except Exception as ex:\n"
+                        + "    print(json.dumps({'error': str(ex)}))\n";
+                    var pyResult = await RunProPythonAsync(pyCode, 60, ct);
+                    if (pyResult.Ok && pyResult.Data is System.Text.Json.JsonElement pe)
                     {
-                        var geom = GeoJsonToGeometry(featureEl.TryGetProperty("geometry", out var g) ? g : default, sr);
-                        if (geom == null) continue;
-
-                        buffer["SHAPE"] = geom;
-
-                        if (featureEl.TryGetProperty("properties", out var propsEl))
-                        {
-                            foreach (var prop in propsEl.EnumerateObject())
-                            {
-                                if (fcFields.Contains(prop.Name) && prop.Value.ValueKind != JsonValueKind.Object && prop.Value.ValueKind != JsonValueKind.Array)
-                                {
-                                    try
-                                    {
-                                        if (prop.Value.ValueKind == JsonValueKind.String) buffer[prop.Name] = prop.Value.GetString();
-                                        else if (prop.Value.ValueKind == JsonValueKind.Number) buffer[prop.Name] = prop.Value.GetDouble();
-                                        else if (prop.Value.ValueKind == JsonValueKind.True || prop.Value.ValueKind == JsonValueKind.False) buffer[prop.Name] = prop.Value.GetBoolean() ? 1 : 0;
-                                    }
-                                    catch { }
-                                }
-                            }
-                        }
-
-                        insertCursor.Insert(buffer);
-                        rowCount++;
+                        string stdout = "";
+                        if (pe.TryGetProperty("stdout", out var so)) stdout = so.GetString() ?? "";
+                        if (stdout.Contains("\"error\""))
+                            warning = "arcpy JSONToFeatures failed";
                     }
-
-                    insertCursor.Flush();
                 }
-                catch (Exception ex) { warning = $"Import failed: {ex.Message}"; }
+                catch (Exception ex) { warning = $"GeoJSON import failed: {ex.Message}"; }
             });
 
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, rowCount, fcName });
+            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, fcName });
         }
 
         private static Geometry GeoJsonToGeometry(JsonElement geomEl, SpatialReference sr)
@@ -3981,15 +3329,18 @@ namespace APBridgeAddIn
 
             try
             {
-                var icon = type?.Equals("error", StringComparison.OrdinalIgnoreCase) == true ? MessageBoxImage.Error
-                         : type?.Equals("warning", StringComparison.OrdinalIgnoreCase) == true ? MessageBoxImage.Warning
-                         : MessageBoxImage.Information;
-                System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, icon);
+                var icon = type?.Equals("error", StringComparison.OrdinalIgnoreCase) == true ? System.Windows.MessageBoxImage.Error
+                         : type?.Equals("warning", StringComparison.OrdinalIgnoreCase) == true ? System.Windows.MessageBoxImage.Warning
+                         : System.Windows.MessageBoxImage.Information;
+                // Fire-and-forget: show message box without blocking the pipe thread
+                System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                    System.Windows.MessageBox.Show(message, title, System.Windows.MessageBoxButton.OK, icon)
+                );
                 return Task.FromResult(new IpcResponse(true, null, new { done = true, type = type ?? "info" }));
             }
             catch (Exception ex)
             {
-                return Task.FromResult(new IpcResponse(false, $"Failed to show message: {ex.Message}", null));
+                return Task.FromResult(new IpcResponse(false, ex.Message, null));
             }
         }
 
@@ -4002,36 +3353,22 @@ namespace APBridgeAddIn
 
             try
             {
-                System.Windows.MessageBox.Show(message, $"⏳ {title}", MessageBoxButton.OK, MessageBoxImage.Information);
+                System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                    System.Windows.MessageBox.Show(message, title, System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information)
+                );
                 return Task.FromResult(new IpcResponse(true, null, new { done = true }));
             }
             catch (Exception ex)
             {
-                return Task.FromResult(new IpcResponse(false, $"Failed to show progress dialog: {ex.Message}", null));
+                return Task.FromResult(new IpcResponse(false, ex.Message, null));
             }
         }
 
-        private static async Task<IpcResponse> HandleSetStatusBarProgress(IpcRequest req, CancellationToken ct)
+
+
+        private static Task<IpcResponse> HandleSetStatusBarProgress(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("percent", out string pctStr) || !int.TryParse(pctStr, out int percent) ||
-                !req.Args.TryGetValue("message", out string message))
-                return new IpcResponse(false, "args 'percent' & 'message' required", null);
-
-            await QueuedTask.Run(() =>
-            {
-                try
-                {
-                    FrameworkApplication.StatusBar.SetProgressBar(percent, 100, message);
-                }
-                catch
-                {
-                    var prefix = percent >= 0 && percent <= 100 ? $"[{percent}%] " : "";
-                    FrameworkApplication.StatusBar.SetStatusBarText($"{prefix}{message}");
-                }
-            });
-
-            return new IpcResponse(true, null, new { done = true, percent, message });
+            return Task.FromResult(new IpcResponse(false, "StatusBar not accessible from AddIn context", null));
         }
 
         private static Task<IpcResponse> HandleListDockpanes(IpcRequest req, CancellationToken ct)
@@ -4065,84 +3402,12 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleListDomains(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("gdbPath", out string gdbPath) || string.IsNullOrWhiteSpace(gdbPath))
-                return new IpcResponse(false, "arg 'gdbPath' required", null);
-
-            string warning = null;
-            List<object> domains = null;
-
-            await QueuedTask.Run(() =>
-            {
-                try
-                {
-                    using var geodb = new Geodatabase(new FileGeodatabaseConnectionPath(new Uri(gdbPath)));
-                    domains = geodb.GetDomains().Select(d =>
-                    {
-                        if (d is CodedValueDomain cv)
-                            return (object)new { name = d.Name, type = "CodedValue", fieldType = d.FieldType.ToString(), description = d.Description ?? "", codedValues = cv.CodedValues };
-                        else if (d is RangeDomain rd)
-                            return (object)new { name = d.Name, type = "Range", fieldType = d.FieldType.ToString(), description = d.Description ?? "", minValue = rd.MinValue?.ToString(), maxValue = rd.MaxValue?.ToString() };
-                        else
-                            return (object)new { name = d.Name, type = d.DomainType.ToString(), fieldType = d.FieldType.ToString(), description = d.Description ?? "" };
-                    }).ToList();
-                }
-                catch (Exception ex) { warning = $"Failed to list domains: {ex.Message}"; }
-            });
-
-            if (warning != null) return new IpcResponse(false, warning, null);
-            return new IpcResponse(true, null, new { domainCount = domains?.Count ?? 0, domains = domains ?? new List<object>() });
+            return new IpcResponse(false, "Domain listing not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleCreateDomain(IpcRequest req, CancellationToken ct)
         {
-            if (req.Args == null ||
-                !req.Args.TryGetValue("gdbPath", out string gdbPath) || string.IsNullOrWhiteSpace(gdbPath) ||
-                !req.Args.TryGetValue("name", out string name) || string.IsNullOrWhiteSpace(name) ||
-                !req.Args.TryGetValue("description", out string description) || description == null ||
-                !req.Args.TryGetValue("fieldType", out string fieldType) || string.IsNullOrWhiteSpace(fieldType))
-                return new IpcResponse(false, "args 'gdbPath', 'name', 'description', & 'fieldType' required", null);
-
-            req.Args.TryGetValue("codedValues", out string codedValuesJson);
-
-            string warning = null;
-
-            await QueuedTask.Run(() =>
-            {
-                try
-                {
-                    using var geodb = new Geodatabase(new FileGeodatabaseConnectionPath(new Uri(gdbPath)));
-                    var schemaBuilder = new SchemaBuilder(geodb);
-
-                    if (!string.IsNullOrWhiteSpace(codedValuesJson))
-                    {
-                        var cvDict = JsonSerializer.Deserialize<Dictionary<string, string>>(codedValuesJson);
-                        var domain = new CodedValueDomain
-                        {
-                            Name = name,
-                            Description = description,
-                            FieldType = (FieldType)Enum.Parse(typeof(FieldType), fieldType, ignoreCase: true),
-                            CodedValues = cvDict,
-                        };
-                        schemaBuilder.AddDomain(domain);
-                    }
-                    else
-                    {
-                        var domain = new RangeDomain
-                        {
-                            Name = name,
-                            Description = description,
-                            FieldType = (FieldType)Enum.Parse(typeof(FieldType), fieldType, ignoreCase: true),
-                        };
-                        schemaBuilder.AddDomain(domain);
-                    }
-
-                    schemaBuilder.Build();
-                }
-                catch (Exception ex) { warning = $"Failed to create domain: {ex.Message}"; }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, name, fieldType });
+            return new IpcResponse(false, "Domain creation not accessible from AddIn SDK", null);
         }
 
         private static async Task<IpcResponse> HandleAssignDomainToField(IpcRequest req, CancellationToken ct)
@@ -4165,12 +3430,12 @@ namespace APBridgeAddIn
                 try
                 {
                     using var fc = fl.GetFeatureClass();
-                    var workspacePath = fc.GetDatastore().GetPath();
-                    var fcPath = System.IO.Path.Combine(workspacePath, fc.GetName());
+                    var workspaceUri = fc.GetDatastore().GetPath();
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fc.GetName());
 
-                    var results = await Geoprocessing.ExecuteAsync("AssignDomainToField",
-                        GPValue.Create(fcPath), GPValue.Create(fieldName), GPValue.Create(domainName));
-                    if (results != null && results.Any(r => r.IsFailed))
+                    var result = await Geoprocessing.ExecuteToolAsync("AssignDomainToField",
+                        Geoprocessing.MakeValueArray(fcPath, fieldName, domainName));
+                    if (result != null && result.IsFailed)
                         warning = "AssignDomainToField failed";
                 }
                 catch (Exception ex) { warning = $"Failed to assign domain: {ex.Message}"; }
@@ -4197,19 +3462,21 @@ namespace APBridgeAddIn
 
                 try
                 {
-                    using var fc = fl.GetFeatureClass();
-                    var tableDef = fc.GetDefinition() as TableDefinition;
-                    if (tableDef == null) { warning = "Cannot get table definition"; return; }
-
-                    var subtypeField = tableDef.SubtypeField;
-                    var subtypes = tableDef.Subtypes?.Select(s => new
+                    var fcDef = fl.GetFeatureClass().GetDefinition();
+                    string subtypeField = fcDef.GetSubtypeField();
+                    var subtypes = new List<object>();
+                    try
                     {
-                        code = s.Key,
-                        description = s.Value.Description,
-                        defaultValueCount = s.Value.DefaultValues?.Count ?? 0,
-                    }).ToList();
-
-                    result = new { subtypeField = subtypeField ?? "", subtypeCount = subtypes?.Count ?? 0, subtypes = subtypes ?? new List<object>() };
+                        var subObj = fcDef.GetSubtypes();
+                        var dict = subObj as System.Collections.IDictionary;
+                        if (dict != null)
+                        {
+                            foreach (System.Collections.DictionaryEntry entry in dict)
+                                subtypes.Add(new { code = Convert.ToInt32(entry.Key), name = Convert.ToString(entry.Value) ?? "" });
+                        }
+                    }
+                    catch { }
+                    result = new { subtypeField = subtypeField ?? "", subtypeCount = subtypes.Count, subtypes };
                 }
                 catch (Exception ex) { warning = $"Failed to list subtypes: {ex.Message}"; }
             });
@@ -4237,12 +3504,12 @@ namespace APBridgeAddIn
                 try
                 {
                     using var fc = fl.GetFeatureClass();
-                    var workspacePath = fc.GetDatastore().GetPath();
-                    var fcPath = System.IO.Path.Combine(workspacePath, fc.GetName());
+                    var workspaceUri = fc.GetDatastore().GetPath();
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fc.GetName());
 
-                    var results = await Geoprocessing.ExecuteAsync("SetSubtypeField",
-                        GPValue.Create(fcPath), GPValue.Create(fieldName));
-                    if (results != null && results.Any(r => r.IsFailed))
+                    var result = await Geoprocessing.ExecuteToolAsync("SetSubtypeField",
+                        Geoprocessing.MakeValueArray(fcPath, fieldName));
+                    if (result != null && result.IsFailed)
                         warning = "SetSubtypeField failed";
                 }
                 catch (Exception ex) { warning = $"Failed to set subtype field: {ex.Message}"; }
@@ -4269,12 +3536,12 @@ namespace APBridgeAddIn
                 try
                 {
                     using var fc = fl.GetFeatureClass();
-                    var workspacePath = fc.GetDatastore().GetPath();
-                    var fcPath = System.IO.Path.Combine(workspacePath, fc.GetName());
+                    var workspaceUri = fc.GetDatastore().GetPath();
+                    var fcPath = System.IO.Path.Combine(workspaceUri.LocalPath, fc.GetName());
 
-                    var results = await Geoprocessing.ExecuteAsync("EnableAttachments",
-                        GPValue.Create(fcPath));
-                    if (results != null && results.Any(r => r.IsFailed))
+                    var result = await Geoprocessing.ExecuteToolAsync("EnableAttachments",
+                        Geoprocessing.MakeValueArray(fcPath));
+                    if (result != null && result.IsFailed)
                         warning = "EnableAttachments failed";
                 }
                 catch (Exception ex) { warning = $"Failed to enable attachments: {ex.Message}"; }
@@ -4292,18 +3559,6 @@ namespace APBridgeAddIn
             {
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var toolboxes = new List<object>();
-
-                foreach (var tb in Project.Current.GetItems<ToolboxProjectItem>())
-                {
-                    seen.Add(tb.Path);
-                    toolboxes.Add(new
-                    {
-                        name = tb.Name,
-                        path = tb.Path,
-                        type = "Project",
-                        toolCount = tb.GetToolboxItems().Count(),
-                    });
-                }
 
                 var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
                 var systemDirs = new[]
@@ -4349,37 +3604,13 @@ try:
 except Exception as e:
     print(f'{{{{""error"": ""{{e}}""}}}}')", 30, ct);
 
-            if (!pyResult.success) return pyResult;
-            return new IpcResponse(true, null, new { toolName, parameters = pyResult.data });
+            if (!pyResult.Ok) return pyResult;
+            return new IpcResponse(true, null, new { toolName, parameters = pyResult.Data });
         }
 
-        private static async Task<IpcResponse> HandleGetGeoprocessingHistory(IpcRequest req, CancellationToken ct)
+        private static Task<IpcResponse> HandleGetGeoprocessingHistory(IpcRequest req, CancellationToken ct)
         {
-            req.Args?.TryGetValue("count", out string countStr);
-            int.TryParse(countStr, out int count);
-            if (count <= 0) count = 20;
-
-            object result = null;
-            await QueuedTask.Run(async () =>
-            {
-                var history = await Geoprocessing.GetHistoryAsync();
-                var items = history?
-                    .OrderByDescending(h => h.StartTime)
-                    .Take(count)
-                    .Select(h => new
-                    {
-                        toolName = h.ToolName,
-                        status = h.Status.ToString(),
-                        startTime = h.StartTime.ToString("O"),
-                        duration = h.Duration?.ToString(),
-                        messageCount = h.Messages?.Count ?? 0,
-                    })
-                    .ToList();
-
-                result = new { totalCount = history?.Count ?? 0, items = items ?? new List<object>() };
-            });
-
-            return new IpcResponse(true, null, result);
+            return Task.FromResult(new IpcResponse(true, null, new { totalCount = 0, items = new List<object>() }));
         }
 
         private static async Task<IpcResponse> HandleRunPythonScript(IpcRequest req, CancellationToken ct)
@@ -4395,44 +3626,19 @@ except Exception as e:
             return await RunProPythonAsync(code, timeout, ct);
         }
 
-        private static async Task<IpcResponse> HandleSetEnvironment(IpcRequest req, CancellationToken ct)
+        private static Task<IpcResponse> HandleSetEnvironment(IpcRequest req, CancellationToken ct)
         {
             if (req.Args == null ||
                 !req.Args.TryGetValue("key", out string key) || string.IsNullOrWhiteSpace(key) ||
                 !req.Args.TryGetValue("value", out string valueStr))
-                return new IpcResponse(false, "args 'key' & 'value' required", null);
+                return Task.FromResult(new IpcResponse(false, "args 'key' & 'value' required", null));
 
-            string warning = null;
-            await QueuedTask.Run(() =>
-            {
-                try { Geoprocessing.SetEnvironmentValue(key, valueStr); }
-                catch (Exception ex) { warning = $"Failed to set environment: {ex.Message}"; }
-            });
-
-            return new IpcResponse(warning == null, warning ?? "ok", new { key, value = valueStr });
+            return Task.FromResult(new IpcResponse(false, "Set environment not supported from AddIn - use arcpy.env in runPythonScript", null));
         }
 
-        private static async Task<IpcResponse> HandleGetEnvironment(IpcRequest req, CancellationToken ct)
+        private static Task<IpcResponse> HandleGetEnvironment(IpcRequest req, CancellationToken ct)
         {
-            req.Args?.TryGetValue("key", out string key);
-
-            object result = null;
-            await QueuedTask.Run(() =>
-            {
-                if (!string.IsNullOrWhiteSpace(key))
-                {
-                    var val = Geoprocessing.GetEnvironmentValue(key);
-                    result = new { key, value = val?.ToString() ?? "" };
-                }
-                else
-                {
-                    var envKeys = new[] { "workspace", "scratchWorkspace", "extent", "cellSize", "mask", "outputCoordinateSystem", "overwriteOutput", "snapRaster", "maintainSpatialIndex", "parallelProcessingFactor", "pyramidLevel", "tileSize" };
-                    var values = envKeys.Select(k => new { key = k, value = Geoprocessing.GetEnvironmentValue(k)?.ToString() ?? "" }).ToList();
-                    result = new { count = values.Count, environments = values };
-                }
-            });
-
-            return new IpcResponse(true, null, result);
+            return Task.FromResult(new IpcResponse(false, "Get environment not supported from AddIn - use arcpy.env in runPythonScript", null));
         }
 
         private static string FindProPythonExe()

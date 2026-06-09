@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -24,6 +25,40 @@ class AddInNotAvailableError(RuntimeError):
 
 class AddInOperationError(RuntimeError):
     """Raised when the Add-In returns an error for an IPC operation."""
+
+
+def _read_pipe(handle, size, timeout):
+    """Read from pipe with timeout using a background thread."""
+    result = []
+    done = threading.Event()
+
+    def reader():
+        try:
+            hr, data = win32file.ReadFile(handle, size)
+            result.append((hr, data))
+        except Exception as exc:
+            result.append(exc)
+        done.set()
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+
+    if not done.wait(timeout):
+        win32file.CancelIo(handle)
+        raise AddInNotAvailableError(
+            f"Read from Add-In pipe timed out after {timeout}s"
+        )
+
+    if isinstance(result[0], Exception):
+        exc = result[0]
+        if isinstance(exc, pywintypes.error):
+            winerror = exc.args[0] if exc.args else 0
+            raise AddInNotAvailableError(
+                f"Pipe read error (winerror={winerror}): {exc}"
+            ) from exc
+        raise AddInNotAvailableError(f"Pipe read error: {exc}") from exc
+
+    return result[0]
 
 
 def is_addin_available() -> bool:
@@ -63,7 +98,8 @@ def _open_pipe(timeout: float = CONNECT_TIMEOUT_SECONDS):
             return handle
         except pywintypes.error as exc:
             last_error = str(exc)
-            if exc.winerror in (2, 231):  # ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY
+            winerror = exc.args[0] if exc.args else 0
+            if winerror in (2, 231):  # ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY
                 time.sleep(0.1)
                 continue
             raise AddInNotAvailableError(f"Failed to connect to Add-In pipe: {exc}") from exc
@@ -81,28 +117,10 @@ def call_addin(
 ) -> Any:
     handle = _open_pipe()
     try:
-        request = json.dumps({"op": op, "args": args or {}}).encode("utf-8")
+        request = (json.dumps({"op": op, "args": args or {}}) + "\n").encode("utf-8")
         win32file.WriteFile(handle, request)
 
-        overlapped = pywintypes.OVERLAPPED()
-        buffer_size = 65536
-        try:
-            hr, data = win32file.ReadFile(handle, buffer_size, overlapped)
-            if hr == 997:  # ERROR_IO_PENDING
-                wait_result = pywintypes.WaitForSingleObject(overlapped.hEvent, int(timeout * 1000))
-                if wait_result != 0:
-                    win32file.CancelIo(handle)
-                    raise AddInNotAvailableError(
-                        f"Read from Add-In pipe timed out after {timeout}s"
-                    )
-                hr, data = win32file.GetOverlappedResult(handle, overlapped, True)
-        except pywintypes.error as exc:
-            if exc.winerror == 997:
-                win32file.CancelIo(handle)
-                raise AddInNotAvailableError(
-                    f"Read from Add-In pipe timed out after {timeout}s"
-                ) from exc
-            raise AddInNotAvailableError(f"Pipe read error: {exc}") from exc
+        _, data = _read_pipe(handle, 65536, timeout)
 
         response = json.loads(data.decode("utf-8").strip("\0"))
         if not response.get("ok", False):

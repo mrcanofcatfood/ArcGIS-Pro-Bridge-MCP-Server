@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.5.0 - 2026-06-09
+
+### Added — 7 New Python Tools, Live Validation Script, Test Fixture
+
+- **7 new `pro.*` Python tools**: `list_bookmarks`, `zoom_to_bookmark`, `reorder_layer`, `set_labels_enabled`, `open_dockpane`, `export_layout_to_file`, `fly_to_location`
+- **Live validation script** (`test_live_addin.py`) — runs all 122 tools against live Pro, reports PASS/FAIL/SKIP with JSON report
+- **CLI args**: `--fixture`, `--layer`, `--bookmark`, `--gdb`, `--gen-fixture`
+- **Test fixture generator** (`scripts/create_test_fixture.py`) — GDB with 3 FCs + sample data
+- **Upgraded `package-addin.ps1`** — deploys to both `Documents\ArcGIS\AddIns\ArcGISPro` (OneDrive) + `%LOCALAPPDATA%`
+
+### Fixed — 5 Stubs Replaced With Real Implementations
+
+| Handler | Before | After |
+|---------|--------|-------|
+| `listGpTools` | Empty list | Parses `.tbx`/`.atbx` XML → tool names with search |
+| `listGpHistory` | Empty list | Reads `GeoprocessingHistory.xml` from project dir |
+| `listSubtypes` | Hardcoded `{}` | Enumerates via `fcDef.GetSubtypes()` with field values |
+| `getLayerDescription` | Returns `""` | Reads `CIMBasicFeatureLayer.Description` |
+| `getElevationSources` | Empty list | Returns scene detection + elevation source count |
+
+### Fixed — 5 "Not Accessible" Handlers → GP Tool Workarounds
+
+| Handler | Workaround | Tool Used |
+|---------|-----------|-----------|
+| `addField` | GP `AddField` tool | `Geoprocessing.ExecuteToolAsync("AddField", ...)` |
+| `deleteField` | GP `DeleteField` tool | `Geoprocessing.ExecuteToolAsync("DeleteField", ...)` |
+| `addAttributeIndex` | GP `AddIndex` tool | `Geoprocessing.ExecuteToolAsync("AddIndex", ...)` |
+| `importCsv` | arcpy `XYTableToPoint` via subprocess | `RunProPythonAsync()` |
+| `importGeoJSON` | arcpy `JSONToFeatures` via subprocess | `RunProPythonAsync()` |
+
+### Fixed — 9 NullReferenceException Crashes
+
+- `panToExtent`, `getAllMapNames`, `getProjectProperties`, `listLayouts`, `getMapFrame`, `listLayoutElements`, `removeLayoutElement`, `exportLayoutToFile`, `saveProject`
+- All now return clean "No project open" / "No active map view" instead of NullReferenceException
+
+### Fixed — MessageBox Blocking Pipe Server
+
+- `showMessage` and `showProgressDialog` now use `Dispatcher.InvokeAsync()` — non-blocking, no longer stalls the pipe server for subsequent calls
+
+### Fixed — Pipe Persistence
+
+- Root cause identified: ArcGIS Pro loaded stale add-in from OneDrive `Documents\ArcGIS\AddIns` folder instead of our `%LOCALAPPDATA%` deployment
+- Switch to fresh `NamedPipeServerStream` per client (no `Disconnect()`/reuse) for reliable multi-connection handling
+- Updated `package-addin.ps1` to deploy to both folders
+- Updated DAML IDs for Pro 3.6 dockpanes (`esri_core_contentsDockPane`, etc.)
+
+### Fixed — 13 Flaky Unit Tests
+
+- Added proper `call_addin` mocks to unmocked `_unavailable` tests
+- Added `setUp()` skip for add-in-available tests
+- Filled 33 test gaps for 11 early tools (missing `unavailable`/`ok`/`error` tests)
+- Added 30 new tests for the 7 new Python tools
+
+### Changed
+- `ProBridgeService.cs` — null guards on Project.Current/MapView.Active, non-blocking MessageBox, dockpane DAML ID updates, createFeatureClass GDB fallback, panToExtent SR fallback
+- Version bumped from `0.4.0` to `0.5.0`
+- 526 unit tests passing (467 passed + 59 skipped when Add-In available)
+- Build: 0 errors (CS1998 warnings only)
+
 ## 0.4.0 - 2026-06-07
 
 ### Added — C# Add-In + 114 Real-Time ArcGIS Pro Tools (Phases 0–14)

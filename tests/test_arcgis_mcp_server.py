@@ -1157,6 +1157,8 @@ class NamedPipeModuleTests(unittest.TestCase):
     def test_call_addin_handles_pipe_not_found_gracefully(self) -> None:
         if not named_pipe._PYWIN32_AVAILABLE:
             self.skipTest("pywin32 not available on this Python")
+        if named_pipe.is_addin_available():
+            self.skipTest("Add-in is available; test requires pipe to be unreachable")
         with self.assertRaises(named_pipe.AddInNotAvailableError):
             named_pipe.call_addin("pro.ping", timeout=0.1)
 
@@ -1168,6 +1170,10 @@ class NamedPipeModuleTests(unittest.TestCase):
 
 class ProToolsTests(unittest.TestCase):
     """Tests for the pro.* MCP tools in arcgis_mcp_server."""
+
+    def setUp(self):
+        if "unavailable" in self._testMethodName and named_pipe.is_addin_available():
+            self.skipTest("Add-in is available; test requires unreachable pipe")
 
     def test_pro_ping_returns_unavailable_when_pipe_unreachable(self) -> None:
         err = named_pipe.AddInNotAvailableError("Not found")
@@ -4181,7 +4187,9 @@ class ProToolsTests(unittest.TestCase):
     # --- Phase 13: Schema Management ---
 
     def test_pro_list_domains_unavailable(self) -> None:
-        result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
         assert result["status"] == "unavailable"
 
     def test_pro_list_domains_ok(self) -> None:
@@ -4201,13 +4209,15 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_create_domain_unavailable(self) -> None:
-        result = server.pro_create_domain(
-            gdb_path=r"C:\data\test.gdb",
-            name="ZoneType",
-            description="Zone type codes",
-            field_type="String",
-            coded_values='{"R":"Residential","C":"Commercial"}',
-        )
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_domain(
+                gdb_path=r"C:\data\test.gdb",
+                name="ZoneType",
+                description="Zone type codes",
+                field_type="String",
+                coded_values='{"R":"Residential","C":"Commercial"}',
+            )
         assert result["status"] == "unavailable"
 
     def test_pro_create_domain_ok(self) -> None:
@@ -4252,9 +4262,11 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_assign_domain_to_field_unavailable(self) -> None:
-        result = server.pro_assign_domain_to_field(
-            layer="Parcels", field="ZoneCode", domain_name="ZoneType"
-        )
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_assign_domain_to_field(
+                layer="Parcels", field="ZoneCode", domain_name="ZoneType"
+            )
         assert result["status"] == "unavailable"
 
     def test_pro_assign_domain_to_field_ok(self) -> None:
@@ -4280,7 +4292,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_list_subtypes_unavailable(self) -> None:
-        result = server.pro_list_subtypes(layer="Parcels")
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_subtypes(layer="Parcels")
         assert result["status"] == "unavailable"
 
     def test_pro_list_subtypes_ok(self) -> None:
@@ -4300,7 +4314,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_set_subtype_field_unavailable(self) -> None:
-        result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
         assert result["status"] == "unavailable"
 
     def test_pro_set_subtype_field_ok(self) -> None:
@@ -4320,7 +4336,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_enable_attachments_unavailable(self) -> None:
-        result = server.pro_enable_attachments(layer="Parcels")
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_enable_attachments(layer="Parcels")
         assert result["status"] == "unavailable"
 
     def test_pro_enable_attachments_ok(self) -> None:
@@ -4342,7 +4360,9 @@ class ProToolsTests(unittest.TestCase):
     # --- Phase 14: Advanced Geoprocessing ---
 
     def test_pro_list_toolboxes_unavailable(self) -> None:
-        result = server.pro_list_toolboxes()
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_toolboxes()
         assert result["status"] == "unavailable"
 
     def test_pro_list_toolboxes_ok(self) -> None:
@@ -4362,7 +4382,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_describe_tool_unavailable(self) -> None:
-        result = server.pro_describe_tool(tool_name="Buffer_analysis")
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_describe_tool(tool_name="Buffer_analysis")
         assert result["status"] == "unavailable"
 
     def test_pro_describe_tool_ok(self) -> None:
@@ -4382,7 +4404,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_get_geoprocessing_history_unavailable(self) -> None:
-        result = server.pro_get_geoprocessing_history()
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_geoprocessing_history()
         assert result["status"] == "unavailable"
 
     def test_pro_get_geoprocessing_history_ok(self) -> None:
@@ -4402,7 +4426,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_run_python_script_unavailable(self) -> None:
-        result = server.pro_run_python_script(code="print('hello')")
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_run_python_script(code="print('hello')")
         assert result["status"] == "unavailable"
 
     def test_pro_run_python_script_ok(self) -> None:
@@ -4424,7 +4450,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_set_environment_unavailable(self) -> None:
-        result = server.pro_set_environment(key="workspace", value=r"C:\data\test.gdb")
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_environment(key="workspace", value=r"C:\data\test.gdb")
         assert result["status"] == "unavailable"
 
     def test_pro_set_environment_ok(self) -> None:
@@ -4444,7 +4472,9 @@ class ProToolsTests(unittest.TestCase):
         )
 
     def test_pro_get_environment_unavailable(self) -> None:
-        result = server.pro_get_environment()
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_environment()
         assert result["status"] == "unavailable"
 
     def test_pro_get_environment_ok(self) -> None:

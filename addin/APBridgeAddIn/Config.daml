@@ -1,5 +1,5 @@
 <ArcGIS defaultAssembly="APBridgeAddIn.dll" defaultNamespace="APBridgeAddIn" xmlns="http://schemas.esri.com/DADF/Registry" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
-  <AddInInfo id="{56c9c0f7-2a8e-4b3d-9f1a-7e5d2c8b1a4f}" version="1.0" desktopVersion="3.5.57366" product="ArcGISPro">
+  <AddInInfo id="{56c9c0f7-2a8e-4b3d-9f1a-7e5d2c8b1a4f}" version="1.0" desktopVersion="3.6" product="ArcGISPro">
     <Name>APBridgeAddIn</Name>
     <Description>Named Pipe bridge for real-time ArcGIS Pro MCP access.</Description>
     <Image>Images\AddinDesktop32.png</Image>
