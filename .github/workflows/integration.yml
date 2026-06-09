@@ -1,0 +1,59 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: "Default layer name"
+        required: false
+        default: "TestPoints"
+      bookmark:
+        description: "Default bookmark name"
+        required: false
+        default: "FullExtent"
+      fixture:
+        description: "Use fixture project (requires TestFixture.aprx)"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  integration:
+    name: Live Pro Validation
+    runs-on: [self-hosted, windows, arcgis-pro]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run live validation
+        run: |
+          $args = @()
+          if ("${{ inputs.fixture }}" -eq "true") { $args += "--fixture" }
+          if ("${{ inputs.layer }}") { $args += "--layer"; $args += "${{ inputs.layer }}" }
+          if ("${{ inputs.bookmark }}") { $args += "--bookmark"; $args += "${{ inputs.bookmark }}" }
+          uv run python test_live_addin.py @args
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-test-report
+          path: live_test_report.json
+
+      - name: Check pass rate
+        shell: pwsh
+        run: |
+          $report = Get-Content live_test_report.json | ConvertFrom-Json
+          $rate = [math]::Round(100 * $report.passed / $report.total, 1)
+          Write-Output "Pass rate: $rate% ($($report.passed)/$($report.total))"
+          if ($rate -lt 50) { throw "Pass rate below 50% - check report" }
