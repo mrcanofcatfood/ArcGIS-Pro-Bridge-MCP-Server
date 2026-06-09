@@ -6,6 +6,17 @@ You are working with an ArcGIS Pro project through a local MCP server named `arc
 
 **DO NOT use shell commands** to explore ArcGIS projects or data. Use the MCP tools instead. The permission gate will prompt you before each tool call.
 
+## Two Modes of Operation
+
+The server has two modes. Choose based on whether the C# Add-In is available:
+
+| Mode | Tools | When to Use | Requires |
+|------|-------|-------------|----------|
+| **File-Based** | `inspect_project_context`, `execute_arcpy_code`, `buffer_features`, `clip_features` | Batch geoprocessing, automated scripts, when Pro is closed or you only need disk access | Nothing extra |
+| **Real-Time (Add-In)** | `pro_ping`, `pro_list_layers`, `pro_select_by_attribute`, `pro_create_point_feature`, etc. (126 tools) | Live map interaction, editing, selection, navigation, dynamic visualization | APBridgeAddIn installed + Pro running + Named Pipe connected |
+
+Check viability: `pro_ping` returns `"status": "ok"` if Add-In is available, `"status": "unavailable"` otherwise.
+
 ## Recommended Workflow
 
 ### 1. Start with Diagnostics
@@ -152,7 +163,8 @@ The server also exposes these MCP Resources:
 
 | Scenario | Approach |
 |----------|----------|
-| ArcGIS Pro is **closed** | Use `project_path="C:\\path\\to\\project.aprx"` — reads from disk |
-| ArcGIS Pro is **open** (read-only) | Use `.aprx` archive reader — no live session access |
-| ArcGIS Pro is **open** (write) | Save project first, close Pro, then use `project_path` |
+| ArcGIS Pro is **closed**, need data | **File-Based mode:** `inspect_project_context(project_path="C:\\path\\to\\project.aprx")` |
+| ArcGIS Pro is **open**, need to **edit data** | **File-Based mode:** Save project first, close Pro, then use `execute_arcpy_code` or `project_path=` |
+| ArcGIS Pro is **open**, need **live interaction** | **Real-Time mode:** `pro.*` tools via Named Pipe (Add-In required) |
+| Heavy geoprocessing / batch | **File-Based mode:** `execute_arcpy_code` with timeout — no Add-In needed |
 | Need **real-time** access | Requires C# Add-In (see `addin/` directory) |

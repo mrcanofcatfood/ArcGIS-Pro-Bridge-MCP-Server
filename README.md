@@ -1,14 +1,36 @@
 # ArcGIS Pro Bridge MCP Server
 
-A local MCP server that connects AI agents (OpenCode, Trae, Cursor, Claude Desktop) to ArcGIS Pro, enabling AI-assisted GIS workflows.
+A local MCP server that connects AI agents (OpenCode, Trae, Cursor, Claude Desktop) to ArcGIS Pro, enabling AI-assisted GIS workflows in **two modes**.
 
-## What It Does
+## Architecture: Two Modes, One Server
 
-- Enables AI clients to read ArcGIS Pro project information (maps, layers, layouts)
-- Allows AI to execute ArcPy geoprocessing operations (Buffer, Clip, Merge)
-- Provides structured access to `.aprx` projects and `.gdb` databases
-- Generates and executes ArcPy scripts with user confirmation
-- **Real-time ArcGIS Pro interaction** via C# Add-In (zoom to layers, select features, inspect live map state)
+### The Challenge with the Core Architecture
+
+The server's primary method for executing code — the `execute_arcpy_code` tool — operates on a **file-based approach**. It reads `.aprx` project files directly from disk and launches ArcPy Python code in a new subprocess for execution. This design is why write operations require ArcGIS Pro to be closed: the server cannot easily interact with a live, running instance of the software.
+
+### The Solution: The C# Add-In for Real-Time Control
+
+To overcome this limitation, the project includes a separate, optional component: a **C# Add-In named APBridgeAddIn**. This Add-In acts as a direct communication bridge, allowing the MCP server to send commands to an active ArcGIS Pro session.
+
+**How it connects:** The Add-In runs inside ArcGIS Pro and creates a Named Pipe server. The MCP server connects to this pipe, enabling instant communication — similar to how CLI-Anything-ArcGIS-Pro exposes an open project over a local socket.
+
+**What it enables:** Once installed, the MCP server gains **126 `pro.*` tools** for interactive capabilities:
+
+- **Map & Selection:** Query live map state, select features, zoom/pan to layers
+- **Editing:** Create, split, merge, and delete features; undo/redo edits
+- **Schema Management:** Add/delete fields, create feature classes, manage domains
+- **3D & Visualization:** Control cameras, 3D exploration, scene backgrounds
+- **Layout Automation:** Create and manage map layouts
+- **Data Exchange:** Export to CSV, GeoJSON, shapefile, KML; import via arcpy
+
+### Switching Between Modes
+
+| Mode | Tools | When to Use | Limitations |
+|------|-------|-------------|-------------|
+| **File-Based** | `inspect_project_context`, `execute_arcpy_code`, `buffer_features`, `clip_features`, etc. | Heavy geoprocessing, batch operations, automated CI/CD, when Pro is closed or under load | Write ops require Pro closed; no live map state |
+| **Real-Time (Add-In)** | All 126 `pro.*` tools | Interactive selection, feature editing, live map inspection, dynamic navigation | Requires Add-In installation + Pro running + Named Pipe connection |
+
+Use the **file-based** tools when you need to process data without the Pro GUI open. Use the **Add-In** tools when you need real-time feedback from a live Pro session.
 
 ## Prerequisites
 
@@ -52,12 +74,17 @@ opencode
 
 Run `/mcp` to verify `arcgis-pro` shows Connected.
 
-### 4. Test
+### 4. Mode 1: File-Based Tools (No Add-In Needed)
 
-Ask OpenCode:
+Ask OpenCode anything that reads `.aprx` files from disk:
 > Run a health check, then summarize the parcels layer in my project.
 
-### 5. (Optional) Install the ArcGIS Pro Add-In for Real-Time Access
+For geoprocessing, use `execute_arcpy_code` with explicit `.aprx` paths:
+> Buffer the parcels layer by 100 meters using the project at C:\data\project.aprx.
+
+**Note:** Write operations via this mode require ArcGIS Pro to be closed (the `.aprx` file must not be locked).
+
+### 5. Mode 2: Real-Time Add-In Tools (Optional, for Live Access)
 
 Build and install the C# Add-In to enable live interaction with the active ArcGIS Pro session:
 
@@ -66,7 +93,27 @@ Build and install the C# Add-In to enable live interaction with the active ArcGI
 3. Double-click the `.esriAddInX` file to install into ArcGIS Pro
 4. Start (or restart) ArcGIS Pro — the Named Pipe bridge starts automatically
 
-After installation, all `pro.*` tools in the table below will work against the live Pro session.
+After installation, all `pro.*` tools work against the live Pro session. Try:
+> List the layers in the active map, then select all parcels with ZONE = 'Residential'.
+
+The `pro_ping` tool returns `"unavailable"` with setup instructions if the Add-In is not reachable.
+
+## Live Validation
+
+A `test_live_addin.py` script runs all 126 `pro.*` tools against a live Pro session and reports PASS/FAIL/SKIP:
+
+```bash
+# With a test fixture project:
+python test_live_addin.py --fixture
+
+# Or with custom layer names:
+python test_live_addin.py --layer "TestPoints" --bookmark "FullExtent" --gdb "test_project/TestFixture.gdb"
+
+# Generate the test fixture GDB first:
+"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe" scripts/create_test_fixture.py
+```
+
+The latest live validation report is at `live_test_report.json`.
 
 ## Available Tools
 
