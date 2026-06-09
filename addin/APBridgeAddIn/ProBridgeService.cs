@@ -3402,12 +3402,80 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleListDomains(IpcRequest req, CancellationToken ct)
         {
-            return new IpcResponse(false, "Domain listing not accessible from AddIn SDK", null);
+            if (req.Args == null ||
+                !req.Args.TryGetValue("gdbPath", out string gdbPath) || string.IsNullOrWhiteSpace(gdbPath))
+                return new IpcResponse(false, "arg 'gdbPath' required", null);
+
+            object result = null;
+            await QueuedTask.Run(() =>
+            {
+                try
+                {
+                    var gdb = new ArcGIS.Core.Data.Geodatabase(
+                        new ArcGIS.Core.Data.FileGeodatabaseConnectionPath(new Uri(gdbPath)));
+                    var domains = gdb.GetDomains();
+                    var list = new List<object>();
+                    foreach (var d in domains)
+                    {
+                        list.Add(new
+                        {
+                            name = d.GetName(),
+                            type = d.GetType().Name,
+                            fieldType = d.GetFieldType().ToString(),
+                        });
+                    }
+                    result = new { domainCount = list.Count, domains = list };
+                }
+                catch { }
+            });
+
+            return new IpcResponse(true, null, result ?? new { domainCount = 0, domains = new List<object>() });
         }
 
         private static async Task<IpcResponse> HandleCreateDomain(IpcRequest req, CancellationToken ct)
         {
-            return new IpcResponse(false, "Domain creation not accessible from AddIn SDK", null);
+            if (req.Args == null ||
+                !req.Args.TryGetValue("gdbPath", out string gdbPath) || string.IsNullOrWhiteSpace(gdbPath) ||
+                !req.Args.TryGetValue("name", out string name) || string.IsNullOrWhiteSpace(name) ||
+                !req.Args.TryGetValue("fieldType", out string fieldType) || string.IsNullOrWhiteSpace(fieldType))
+                return new IpcResponse(false, "args 'gdbPath', 'name', & 'fieldType' required", null);
+
+            req.Args.TryGetValue("description", out string description);
+            req.Args.TryGetValue("codedValues", out string codedValues);
+            if (string.IsNullOrWhiteSpace(description)) description = name;
+
+            string warning = null;
+
+            await QueuedTask.Run(async () =>
+            {
+                try
+                {
+                    var gpParams = new List<object?> { gdbPath, name, description, fieldType };
+                    if (!string.IsNullOrWhiteSpace(codedValues))
+                    {
+                        // codedValues comes as JSON dict like {"R":"Residential","C":"Commercial"}
+                        // GP CreateDomain expects format: "R Residential;C Commercial"
+                        try
+                        {
+                            var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(codedValues);
+                            if (dict != null)
+                            {
+                                var parts = dict.Select(kvp => $"{kvp.Key} {kvp.Value}");
+                                gpParams.Add(string.Join(";", parts));
+                            }
+                        }
+                        catch { gpParams.Add(codedValues); }
+                    }
+
+                    var result = await Geoprocessing.ExecuteToolAsync("CreateDomain",
+                        Geoprocessing.MakeValueArray(gpParams.ToArray()));
+                    if (result != null && result.IsFailed)
+                        warning = "CreateDomain failed";
+                }
+                catch (Exception ex) { warning = $"CreateDomain error: {ex.Message}"; }
+            });
+
+            return new IpcResponse(warning == null, warning ?? "ok", new { done = warning == null, name, domain = name });
         }
 
         private static async Task<IpcResponse> HandleAssignDomainToField(IpcRequest req, CancellationToken ct)
@@ -3610,7 +3678,45 @@ except Exception as e:
 
         private static Task<IpcResponse> HandleGetGeoprocessingHistory(IpcRequest req, CancellationToken ct)
         {
-            return Task.FromResult(new IpcResponse(true, null, new { totalCount = 0, items = new List<object>() }));
+            var items = new List<object>();
+            try
+            {
+                var historyPaths = new[]
+                {
+                    System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "ESRI", "ArcGISPro", "arcgispro-History.xml"
+                    ),
+                };
+                if (Project.Current != null)
+                {
+                    var projDir = System.IO.Path.GetDirectoryName(Project.Current.Path);
+                    if (projDir != null)
+                        historyPaths = new[] { System.IO.Path.Combine(projDir, "GeoprocessingHistory.xml") };
+                }
+
+                foreach (var path in historyPaths)
+                {
+                    if (!System.IO.File.Exists(path)) continue;
+                    var xml = System.Xml.Linq.XDocument.Load(path);
+                    foreach (var entry in xml.Descendants("HistoryEntry")
+                        .Take(200))
+                    {
+                        items.Add(new
+                        {
+                            tool = entry.Element("ToolName")?.Value ?? "",
+                            start = entry.Element("StartTime")?.Value ?? "",
+                            end = entry.Element("EndTime")?.Value ?? "",
+                            status = entry.Element("Status")?.Value ?? "",
+                            duration = entry.Element("Duration")?.Value ?? "",
+                        });
+                    }
+                    break;
+                }
+            }
+            catch { }
+
+            return Task.FromResult(new IpcResponse(true, null, new { totalCount = items.Count, items }));
         }
 
         private static async Task<IpcResponse> HandleRunPythonScript(IpcRequest req, CancellationToken ct)
