@@ -3970,66 +3970,47 @@ except Exception as e:
             return dlls.FirstOrDefault();
         }
 
-        private static async Task<IpcResponse> RunProPythonInProcessAsync(string code, int timeoutSeconds, CancellationToken ct)
+        private static Task<IpcResponse> RunProPythonInProcessAsync(string code, int timeoutSeconds, CancellationToken ct)
         {
-            var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(timeoutSeconds * 1000);
-            var tcs = new TaskCompletionSource<IpcResponse>();
+            // Note: In-process Python execution cannot use arcpy.mp.ArcGISProject("CURRENT")
+            // because Pro's internal arcpy runtime already holds the GIL, causing a deadlock
+            // when pythonnet tries to acquire it. This method handles simple Python code only.
+            // For arcpy code, the subprocess fallback in RunProPythonAsync is used.
 
-            await QueuedTask.Run(async () =>
+            return Task.Run(() =>
             {
                 try
                 {
                     using (Py.GIL())
                     {
-                        // Capture stdout/stderr via StringIO redirect
                         var setup = "import sys, io\n"
                             + "_stdout = sys.stdout\n"
                             + "_stderr = sys.stderr\n"
                             + "sys.stdout = io.StringIO()\n"
                             + "sys.stderr = io.StringIO()\n";
                         PythonEngine.Exec(setup);
-
                         PythonEngine.Exec(code);
-
                         var getOutput = "stdout = sys.stdout.getvalue()\n"
                             + "stderr = sys.stderr.getvalue()\n"
                             + "sys.stdout = _stdout\n"
                             + "sys.stderr = _stderr\n";
                         PythonEngine.Exec(getOutput);
-
                         var stdout = PythonEngine.Eval("stdout")?.ToString() ?? "";
                         var stderr = PythonEngine.Eval("stderr")?.ToString() ?? "";
-                        tcs.TrySetResult(new IpcResponse(true, null, new { stdout, stderr, exitCode = 0, inProcess = true }));
+                        return new IpcResponse(true, null, new { stdout, stderr, exitCode = 0, inProcess = true });
                     }
                 }
                 catch (System.Exception ex)
                 {
-                    tcs.TrySetResult(new IpcResponse(false, $"In-process Python error: {ex.Message}", null));
+                    return new IpcResponse(false, $"In-process Python error: {ex.Message}", null);
                 }
-            });
-
-            try
-            {
-                return await tcs.Task;
-            }
-            catch (OperationCanceledException)
-            {
-                return new IpcResponse(false, "In-process Python script timed out", null);
-            }
+            }, ct);
         }
 
         private static async Task<IpcResponse> RunProPythonAsync(string code, int timeoutSeconds, CancellationToken ct)
         {
-            // Try in-process first (lazy init), fall back to subprocess
-            EnsurePythonEngine();
-            if (_pyEngineReady)
-            {
-                var inProc = await RunProPythonInProcessAsync(code, timeoutSeconds, ct);
-                if (inProc.Ok || !inProc.Error.Contains("not import"))
-                    return inProc; // Success or non-import error — return as-is
-            }
-
+            // Note: In-process path is disabled for runPythonScript due to GIL contention
+            // with Pro's internal arcpy. Use pro.pingPythonRuntime to verify the engine works.
             // Fall back to subprocess
             var pythonExe = FindProPythonExe();
             if (pythonExe == null)
