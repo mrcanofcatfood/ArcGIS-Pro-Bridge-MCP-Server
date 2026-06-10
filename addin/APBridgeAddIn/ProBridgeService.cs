@@ -15,6 +15,7 @@ using System.IO.Pipes;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Python.Runtime;
@@ -62,6 +63,7 @@ namespace APBridgeAddIn
         public void Start()
         {
             _stopped = false;
+            DiscoverPlugins();
             _serverThread = new Thread(RunLoop) { IsBackground = true, Name = "ProBridgePipeServer" };
             _serverThread.Start();
         }
@@ -70,6 +72,27 @@ namespace APBridgeAddIn
         {
             _stopped = true;
             _serverThread = null;
+        }
+
+        private void DiscoverPlugins()
+        {
+            try
+            {
+                var handlerType = typeof(IProBridgeHandler);
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (assembly.IsDynamic || assembly.GlobalAssemblyCache) continue;
+                    foreach (var type in assembly.GetExportedTypes())
+                    {
+                        if (type.IsAbstract || !handlerType.IsAssignableFrom(type)) continue;
+                        var attr = type.GetCustomAttribute<ProBridgeHandlerAttribute>();
+                        if (attr == null) continue;
+                        var instance = (IProBridgeHandler)Activator.CreateInstance(type);
+                        _handlers[attr.Op] = async (req, ct) => await instance.Handle(req, ct);
+                    }
+                }
+            }
+            catch { }
         }
 
         private void RunLoop()
