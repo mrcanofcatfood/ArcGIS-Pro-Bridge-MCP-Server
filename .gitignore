@@ -51,3 +51,7 @@ test_project/
 # Generated report files
 live_test_report.json
 temp_test_*
+
+# Test project build output
+tests-cs/bin/
+tests-cs/obj/
