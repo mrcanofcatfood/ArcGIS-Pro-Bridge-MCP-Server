@@ -2725,7 +2725,41 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleCreateLayout(IpcRequest req, CancellationToken ct)
         {
-            return new IpcResponse(false, "Layout creation not accessible from AddIn SDK", null);
+            if (req.Args == null ||
+                !req.Args.TryGetValue("layoutName", out string layoutName) || string.IsNullOrWhiteSpace(layoutName))
+                return new IpcResponse(false, "arg 'layoutName' required", null);
+
+            req.Args.TryGetValue("width", out string widthStr);
+            req.Args.TryGetValue("height", out string heightStr);
+            double.TryParse(widthStr, out double width);
+            double.TryParse(heightStr, out double height);
+            if (width <= 0) width = 297;
+            if (height <= 0) height = 210;
+            req.Args.TryGetValue("units", out string units);
+            if (string.IsNullOrWhiteSpace(units)) units = "MILLIMETERS";
+
+            await QueuedTask.Run(async () =>
+            {
+                try
+                {
+                    if (Project.Current == null) return;
+                    var projPath = Project.Current.Path;
+                    var pyCode = "import arcpy\n"
+                        + $"proj = {System.Text.Json.JsonSerializer.Serialize(projPath)}\n"
+                        + $"name = {System.Text.Json.JsonSerializer.Serialize(layoutName)}\n"
+                        + $"w = {width}\nh = {height}\n"
+                        + $"u = {System.Text.Json.JsonSerializer.Serialize(units)}\n"
+                        + "try:\n"
+                        + "    arcpy.management.CreateLayout(proj, name, w, h, u)\n"
+                        + "    print('ok')\n"
+                        + "except Exception as ex:\n"
+                        + "    print(f'error: {ex}')\n";
+                    await RunProPythonAsync(pyCode, 30, ct);
+                }
+                catch { }
+            });
+
+            return new IpcResponse(true, null, new { done = true, layoutName });
         }
 
         private static async Task<IpcResponse> HandleCreateMap(IpcRequest req, CancellationToken ct)
@@ -2735,7 +2769,33 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleAddBasemap(IpcRequest req, CancellationToken ct)
         {
-            return new IpcResponse(false, "Basemap not accessible from AddIn SDK", null);
+            if (req.Args == null ||
+                !req.Args.TryGetValue("basemapName", out string basemapName) || string.IsNullOrWhiteSpace(basemapName))
+                return new IpcResponse(false, "arg 'basemapName' required", null);
+
+            await QueuedTask.Run(async () =>
+            {
+                try
+                {
+                    var map = MapView.Active?.Map;
+                    if (map == null) return;
+                    var mapName = map.Name;
+                    var pyCode = "import arcpy\n"
+                        + $"map_name = {System.Text.Json.JsonSerializer.Serialize(mapName)}\n"
+                        + $"basemap = {System.Text.Json.JsonSerializer.Serialize(basemapName)}\n"
+                        + "try:\n"
+                        + "    aprx = arcpy.mp.ArcGISProject('CURRENT')\n"
+                        + "    m = aprx.listMaps(map_name)[0]\n"
+                        + "    m.addBasemap(basemap)\n"
+                        + "    print('ok')\n"
+                        + "except Exception as ex:\n"
+                        + "    print(f'error: {ex}')\n";
+                    await RunProPythonAsync(pyCode, 30, ct);
+                }
+                catch { }
+            });
+
+            return new IpcResponse(true, null, new { done = true, basemapName });
         }
 
         // --- Phase 9: Advanced 3D & Visualization ---

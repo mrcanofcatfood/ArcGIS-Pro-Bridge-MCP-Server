@@ -1,0 +1,13 @@
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\bin\Debug\net8.0-windows8.0\APBridgeAddIn.deps.json
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\bin\Debug\net8.0-windows8.0\APBridgeAddIn.dll
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\bin\Debug\net8.0-windows8.0\APBridgeAddIn.pdb
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.csproj.AssemblyReference.cache
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.AssemblyInfoInputs.cache
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.AssemblyInfo.cs
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.csproj.CoreCompileInputs.cache
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.sourcelink.json
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.dll
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\refint\APBridgeAddIn.dll
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\APBridgeAddIn.pdb
+C:\Users\Jack Fennell\OneDrive - TAFE Queensland\Documents\Opencode Projects\arcgis-opencode-mcp\addin\APBridgeAddIn\obj\Debug\net8.0-windows8.0\ref\APBridgeAddIn.dll
