@@ -2913,7 +2913,41 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleSearchAddress(IpcRequest req, CancellationToken ct)
         {
-            return new IpcResponse(false, "Address search not accessible from AddIn SDK", null);
+            if (req.Args == null ||
+                !req.Args.TryGetValue("address", out string address) || string.IsNullOrWhiteSpace(address))
+                return new IpcResponse(false, "arg 'address' required", null);
+
+            req.Args.TryGetValue("maxResults", out string maxStr);
+            int.TryParse(maxStr, out int maxResults);
+            if (maxResults <= 0) maxResults = 10;
+
+            // Use arcpy subprocess for geocoding (works with locators set up in Pro)
+            var pythonCode = "import arcpy, json\n"
+                + $"address = {System.Text.Json.JsonSerializer.Serialize(address)}\n"
+                + $"max_results = {maxResults}\n"
+                + "results = []\n"
+                + "try:\n"
+                + "    locators = arcpy.geocoding.ListLocators()\n"
+                + "    if locators:\n"
+                + "        for loc in locators[:1]:\n"
+                + "            geocode_result = arcpy.geocoding.GeocodeAddresses(\n"
+                + "                [[address]], loc, 'SingleLine SingleLine')\n"
+                + "            with arcpy.da.SearchCursor(geocode_result[0], ['Shape@', 'Status', 'Score', 'Match_addr']) as cur:\n"
+                + "                for i, row in enumerate(cur):\n"
+                + "                    if i >= max_results: break\n"
+                + "                    pt = row[0]\n"
+                + "                    results.append({'address': row[3] or address, 'score': row[2], 'status': row[1],\n"
+                + "                        'x': pt.centroid.X if pt else 0, 'y': pt.centroid.Y if pt else 0})\n"
+                + "    print(json.dumps({'locatorCount': len(locators), 'results': results, 'address': address}))\n"
+                + "except Exception as ex:\n"
+                + "    print(json.dumps({'error': str(ex), 'results': []}))\n";
+            var pyResult = await RunProPythonAsync(pythonCode, 30, ct);
+            object data = new { address, locatorCount = 0, results = new List<object>() };
+            if (pyResult.Ok && pyResult.Data is System.Text.Json.JsonElement pe)
+            {
+                try { data = System.Text.Json.JsonSerializer.Deserialize<object>(pe.GetRawText()); } catch { }
+            }
+            return new IpcResponse(true, null, data);
         }
 
         private static async Task<IpcResponse> HandleOpenAttributeTable(IpcRequest req, CancellationToken ct)
