@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.1 - 2026-06-10
+
+### Added — Phase 3: In-Process Python Proof of Concept
+
+- **`pro.pingPythonRuntime`** — new tool that imports `arcpy` inside the Add-In process via `pythonnet` 3.0.5, returning Python version, arcpy version, and engine status
+- **`pythonnet` NuGet package** (`Python.Runtime.dll`) — ships with the Add-In, enables CPython 3.13 hosting inside the .NET 8 process
+- **Lazy PythonEngine initialization** — defers `Py_Initialize()` to first use, avoids crash at Pro startup
+- **Auto-discovery of Python DLL** — `FindProPythonDll()` dynamically finds `python3*.dll` (supports Pro 3.6's Python 3.13)
+
+### Changed
+- `ProBridgeService.cs` — added `EnsurePythonEngine()`, `RunProPythonInProcessAsync()`, `FindProPythonDll()`, `HandlePingPythonRuntime`
+- `package-addin.ps1` — now includes `Python.Runtime.dll` and `Microsoft.CSharp.dll` in the `.esriAddInX` package
+
+### Notes
+- `runPythonScript` still uses subprocess fallback (in-process `PythonEngine.Exec()` has GIL contention with Pro's internal arcpy runtime)
+- `pro.pingPythonRuntime` confirms the engine is alive and arcpy is importable in-process
+- Pro 3.6 ships **Python 3.13.7** (not 3.11) — `FindProPythonDll()` handles this dynamically
+
 ## 0.5.0 - 2026-06-09
 
 ### Added — 7 New Python Tools, Live Validation Script, Test Fixture
