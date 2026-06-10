@@ -40,9 +40,8 @@ jobs:
         run: uv run python -m pytest tests/ -q --tb=short
 
   dotnet:
-    name: C# Build
+    name: C# Build & Test
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,19 +63,19 @@ jobs:
           foreach ($p in $sdkPaths) {
             if (-not (Test-Path $p)) { $available = $false; break }
           }
-          if ($available) {
-            echo "sdk_available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } else {
-            echo "sdk_available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          }
+          echo "sdk_available=$available" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Build
+      - name: Build Add-In
         if: steps.check_sdk.outputs.sdk_available == 'true'
         working-directory: addin/APBridgeAddIn
         run: dotnet build APBridgeAddIn.csproj --nologo -v:q 2>&1 | Select-String -Pattern "error|Build succeeded|Build FAILED"
         shell: pwsh
 
-      - name: Skip build
+      - name: Build and run standalone tests
+        working-directory: tests-cs
+        run: dotnet test --nologo -v:q
+
+      - name: Skip Add-In build
         if: steps.check_sdk.outputs.sdk_available != 'true'
         shell: pwsh
-        run: echo "::warning::ArcGIS Pro SDK not available on this runner. Skipping C# build."
+        run: echo "::warning::ArcGIS Pro SDK not available on this runner. Skipping Add-In build."
