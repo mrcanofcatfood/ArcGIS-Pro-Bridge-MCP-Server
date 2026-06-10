@@ -19,6 +19,12 @@ function Package {
     $null = New-Item -ItemType Directory -Path (Join-Path $tempDir "Install") -Force
     Copy-Item (Join-Path $projDir "Config.daml") (Join-Path $tempDir "Config.daml")
     Copy-Item (Join-Path $outDir "APBridgeAddIn.dll") (Join-Path $tempDir "Install\APBridgeAddIn.dll")
+    # Include NuGet dependency DLLs needed at runtime
+    $extraDlls = @("Python.Runtime.dll", "Microsoft.CSharp.dll")
+    foreach ($dll in $extraDlls) {
+        $src = Join-Path $outDir $dll
+        if (Test-Path $src) { Copy-Item $src (Join-Path $tempDir "Install\$dll") }
+    }
     if (Test-Path $esriAddinX) { Remove-Item $esriAddinX }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $esriAddinX)

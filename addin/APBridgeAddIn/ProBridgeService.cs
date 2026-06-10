@@ -17,6 +17,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Python.Runtime;
 
 namespace APBridgeAddIn
 {
@@ -39,6 +40,11 @@ namespace APBridgeAddIn
             ["Bookmarks"] = "esri_mapping_bookmarksManagerDockPane",
             ["Time"] = "esri_mapping_timeDockPane",
         };
+
+        // Lazy PythonEngine initialization (try in-process first, fall back to subprocess)
+        private static volatile bool _pyEngineReady;
+        private static volatile bool _pyEngineAttempted;
+        private static readonly object _pyEngineLock = new();
 
         private static readonly Dictionary<string, string> _knownRibbonTabs = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -142,6 +148,7 @@ namespace APBridgeAddIn
         private static readonly Dictionary<string, Func<IpcRequest, CancellationToken, Task<IpcResponse>>> _handlers = new()
         {
             ["pro.ping"] = HandlePing,
+            ["pro.pingPythonRuntime"] = HandlePingPythonRuntime,
             ["pro.getActiveMapName"] = HandleGetActiveMapName,
             ["pro.listLayers"] = HandleListLayers,
             ["pro.countFeatures"] = HandleCountFeatures,
@@ -3841,6 +3848,48 @@ except Exception as e:
             return Task.FromResult(new IpcResponse(false, "Get environment not supported from AddIn - use arcpy.env in runPythonScript", null));
         }
 
+        // --- Phase 3: In-Process Python Execution (Proof of Concept) ---
+
+        private static async Task<IpcResponse> HandlePingPythonRuntime(IpcRequest req, CancellationToken ct)
+        {
+            EnsurePythonEngine();
+            if (!_pyEngineReady)
+                return new IpcResponse(false, $"PythonEngine not available: {_pyEngineError ?? "unknown"}", null);
+
+            try
+            {
+                using (Py.GIL())
+                {
+                    dynamic sys = Py.Import("sys");
+                    var version = sys.version;
+                    var path = sys.executable;
+
+                    dynamic arcpy = null;
+                    string arcpyVersion = null;
+                    try
+                    {
+                        arcpy = Py.Import("arcpy");
+                        arcpyVersion = arcpy.GetInstallInfo()["Version"].ToString();
+                    }
+                    catch { arcpyVersion = "arcpy not importable"; }
+
+                    return new IpcResponse(true, null, new
+                    {
+                        pong = "inprocess",
+                        pythonVersion = version.ToString(),
+                        pythonPath = path.ToString(),
+                        arcpyVersion,
+                        hasGil = true,
+                        engineReady = true,
+                    });
+                }
+            }
+            catch (System.Exception ex)
+            {
+                return new IpcResponse(false, $"In-process Python error: {ex.GetType().Name}: {ex.Message}", null);
+            }
+        }
+
         private static string FindProPythonExe()
         {
             try
@@ -3861,8 +3910,127 @@ except Exception as e:
             return null;
         }
 
+        // --- Lazy PythonEngine Initialization ---
+
+        private static string _pyEngineError;
+
+        private static void EnsurePythonEngine()
+        {
+            if (_pyEngineReady || _pyEngineAttempted) return;
+            lock (_pyEngineLock)
+            {
+                if (_pyEngineReady || _pyEngineAttempted) return;
+                _pyEngineAttempted = true;
+                try
+                {
+                    var dllPath = FindProPythonDll();
+                    if (dllPath == null) { _pyEngineError = "python311.dll not found"; return; }
+
+                    // Check if Python is already initialized in this process
+                    if (PythonEngine.IsInitialized)
+                    {
+                        _pyEngineReady = true;
+                        return;
+                    }
+
+                    Runtime.PythonDLL = dllPath;
+                    PythonEngine.Initialize();
+                    _pyEngineReady = true;
+                }
+                catch (System.Exception ex)
+                {
+                    _pyEngineError = $"{ex.GetType().Name}: {ex.Message}";
+                }
+            }
+        }
+
+        private static string FindProPythonDll()
+        {
+            string envDir = null;
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\ESRI\ArcGISPro");
+                if (key?.GetValue("InstallDir") is string installDir)
+                    envDir = System.IO.Path.Combine(installDir, "bin", "Python", "envs", "arcgispro-py3");
+            }
+            catch { }
+
+            if (envDir == null)
+            {
+                var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                envDir = System.IO.Path.Combine(pf, @"ArcGIS\Pro\bin\Python\envs\arcgispro-py3");
+            }
+
+            if (!Directory.Exists(envDir)) return null;
+
+            // Find python3*.dll (supports any 3.x version: python311.dll, python313.dll, etc.)
+            var dlls = Directory.EnumerateFiles(envDir, "python3*.dll")
+                .Where(f => !f.EndsWith("python3.dll", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            return dlls.FirstOrDefault();
+        }
+
+        private static async Task<IpcResponse> RunProPythonInProcessAsync(string code, int timeoutSeconds, CancellationToken ct)
+        {
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeoutSeconds * 1000);
+            var tcs = new TaskCompletionSource<IpcResponse>();
+
+            await QueuedTask.Run(async () =>
+            {
+                try
+                {
+                    using (Py.GIL())
+                    {
+                        // Capture stdout/stderr via StringIO redirect
+                        var setup = "import sys, io\n"
+                            + "_stdout = sys.stdout\n"
+                            + "_stderr = sys.stderr\n"
+                            + "sys.stdout = io.StringIO()\n"
+                            + "sys.stderr = io.StringIO()\n";
+                        PythonEngine.Exec(setup);
+
+                        PythonEngine.Exec(code);
+
+                        var getOutput = "stdout = sys.stdout.getvalue()\n"
+                            + "stderr = sys.stderr.getvalue()\n"
+                            + "sys.stdout = _stdout\n"
+                            + "sys.stderr = _stderr\n";
+                        PythonEngine.Exec(getOutput);
+
+                        var stdout = PythonEngine.Eval("stdout")?.ToString() ?? "";
+                        var stderr = PythonEngine.Eval("stderr")?.ToString() ?? "";
+                        tcs.TrySetResult(new IpcResponse(true, null, new { stdout, stderr, exitCode = 0, inProcess = true }));
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    tcs.TrySetResult(new IpcResponse(false, $"In-process Python error: {ex.Message}", null));
+                }
+            });
+
+            try
+            {
+                return await tcs.Task;
+            }
+            catch (OperationCanceledException)
+            {
+                return new IpcResponse(false, "In-process Python script timed out", null);
+            }
+        }
+
         private static async Task<IpcResponse> RunProPythonAsync(string code, int timeoutSeconds, CancellationToken ct)
         {
+            // Try in-process first (lazy init), fall back to subprocess
+            EnsurePythonEngine();
+            if (_pyEngineReady)
+            {
+                var inProc = await RunProPythonInProcessAsync(code, timeoutSeconds, ct);
+                if (inProc.Ok || !inProc.Error.Contains("not import"))
+                    return inProc; // Success or non-import error — return as-is
+            }
+
+            // Fall back to subprocess
             var pythonExe = FindProPythonExe();
             if (pythonExe == null)
                 return new IpcResponse(false, "ArcGIS Pro Python interpreter not found", null);
@@ -3894,7 +4062,7 @@ except Exception as e:
                 {
                     var stdout = await stdoutTask;
                     var stderr = await stderrTask;
-                    return new IpcResponse(true, null, new { stdout, stderr, exitCode = process.ExitCode });
+                    return new IpcResponse(true, null, new { stdout, stderr, exitCode = process.ExitCode, inProcess = false });
                 }
                 else
                 {
@@ -3956,3 +4124,4 @@ except Exception as e:
         }
     }
 }
+

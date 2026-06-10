@@ -1447,6 +1447,13 @@ def _call_addin(op: str, args: dict[str, str] | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+@mcp.tool()
+def pro_ping_python_runtime() -> dict[str, Any]:
+    """Ping the in-process Python runtime (Python.NET POC). Returns version info if available."""
+    return _call_addin("pro.pingPythonRuntime", {})
+
+
+@mcp.tool()
 def pro_ping() -> dict[str, Any]:
     """Ping the ArcGIS Pro Add-In to verify Named Pipe connectivity."""
     return _call_addin("pro.ping")
