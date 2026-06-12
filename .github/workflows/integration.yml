@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: true
+      gen_fixture:
+        description: "Re-generate fixture data before testing"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   integration:
@@ -36,13 +41,59 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Generate fixture data (if needed)
+        if: ${{ inputs.gen_fixture == 'true' }}
+        shell: pwsh
+        run: |
+          $proPython = "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
+          if (Test-Path $proPython) {
+            Write-Output "Generating GDB fixture..."
+            & $proPython scripts/create_test_fixture.py 2>&1
+            Write-Output "Generating .aprx fixture..."
+            & $proPython scripts/create_test_aprx.py 2>&1
+          } else {
+            Write-Output "Pro Python not found, skipping fixture generation"
+          }
+
+      - name: Ensure ArcGIS Pro is running
+        shell: pwsh
+        run: |
+          $proExe = "C:\Program Files\ArcGIS\Pro\bin\ArcGISPro.exe"
+          $projPath = "${{ github.workspace }}\test_project\TestFixture.aprx"
+          # Check if pipe is already available
+          $pipeReady = & ${{ github.workspace }}\.github\workflows\check_pipe.ps1 2>$null
+          if (-not $?) {
+            Write-Output "Starting ArcGIS Pro with fixture project..."
+            if (Test-Path $projPath) {
+              Start-Process -FilePath $proExe -ArgumentList $projPath
+            } else {
+              Start-Process -FilePath $proExe
+            }
+            # Wait up to 120s for pipe
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 3
+              $ready = & ${{ github.workspace }}\.github\workflows\check_pipe.ps1 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                Write-Output "ArcGIS Pro Add-In connected"
+                break
+              }
+            }
+            if ($LASTEXITCODE -ne 0) {
+              Write-Output "Warning: Pro may not be ready, tests will SKIP add-in tools"
+            }
+          } else {
+            Write-Output "ArcGIS Pro Add-In already connected"
+          }
+
       - name: Run live validation
+        shell: pwsh
         run: |
           $args = @()
           if ("${{ inputs.fixture }}" -eq "true") { $args += "--fixture" }
           if ("${{ inputs.layer }}") { $args += "--layer"; $args += "${{ inputs.layer }}" }
           if ("${{ inputs.bookmark }}") { $args += "--bookmark"; $args += "${{ inputs.bookmark }}" }
-          uv run python test_live_addin.py @args
+          uv run python test_live_addin.py @args 2>&1
 
       - name: Upload report
         uses: actions/upload-artifact@v4
@@ -53,7 +104,30 @@ jobs:
       - name: Check pass rate
         shell: pwsh
         run: |
+          if (-not (Test-Path "live_test_report.json")) {
+            Write-Output "No report file found — tests may have failed to start"
+            exit 1
+          }
           $report = Get-Content live_test_report.json | ConvertFrom-Json
           $rate = [math]::Round(100 * $report.passed / $report.total, 1)
           Write-Output "Pass rate: $rate% ($($report.passed)/$($report.total))"
+          Write-Output "Skipped: $($report.skipped)"
+          Write-Output "Failed: $($report.failed)"
+          # List failed tests
+          foreach ($r in $report.results) {
+            if ($r.status -eq "FAIL") {
+              Write-Output "  FAIL: $($r.name) — $($r.reason)"
+            }
+          }
           if ($rate -lt 50) { throw "Pass rate below 50% - check report" }
+
+      - name: Cleanup temp files
+        shell: pwsh
+        if: always()
+        run: |
+          $root = "${{ github.workspace }}"
+          $tempPatterns = @("temp_test*", "temp_export*", "temp_layout*")
+          foreach ($pattern in $tempPatterns) {
+            Get-ChildItem -Path $root -Filter $pattern -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -Path $root -Filter $pattern -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          }

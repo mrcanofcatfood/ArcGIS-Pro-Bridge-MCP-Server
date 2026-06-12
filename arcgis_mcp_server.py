@@ -1554,6 +1554,43 @@ def pro_resolve_layer(layer_hint: str, cutoff: float = 0.6) -> dict[str, Any]:
 
 
 @mcp.tool()
+def pro_create_snapshot(
+    layer: str, oids: str | None = None, description: str | None = None
+) -> dict[str, Any]:
+    """Create a snapshot backup of features in a layer before destructive edits.
+    Features are copied to a snapshots.gdb in the project folder.
+    Optionally specify comma-separated OIDs to snapshot only specific features."""
+    args: dict[str, str] = {"layer": layer}
+    if oids is not None:
+        args["oids"] = oids
+    if description is not None:
+        args["description"] = description
+    return _call_addin("pro.createSnapshot", args)
+
+
+@mcp.tool()
+def pro_restore_snapshot(snapshot_name: str, target_layer: str) -> dict[str, Any]:
+    """Restore features from a snapshot back to the original layer.
+    Uses the Append GP tool to add snapshot features back."""
+    return _call_addin(
+        "pro.restoreSnapshot",
+        {"snapshotName": snapshot_name, "targetLayer": target_layer},
+    )
+
+
+@mcp.tool()
+def pro_list_snapshots() -> dict[str, Any]:
+    """List all snapshots available in the snapshots.gdb."""
+    return _call_addin("pro.listSnapshots", {})
+
+
+@mcp.tool()
+def pro_delete_snapshot(snapshot_name: str) -> dict[str, Any]:
+    """Delete a snapshot from the snapshots.gdb."""
+    return _call_addin("pro.deleteSnapshot", {"snapshotName": snapshot_name})
+
+
+@mcp.tool()
 def pro_ping() -> dict[str, Any]:
     """Ping the ArcGIS Pro Add-In to verify Named Pipe connectivity."""
     return _call_addin("pro.ping")
@@ -1896,8 +1933,13 @@ def pro_find_features(
 
 
 @mcp.tool()
-def pro_delete_features_by_oid(layer: str, oids: str) -> dict[str, Any]:
-    """Delete features by comma-separated OIDs in a layer (e.g. '1,2,3')."""
+def pro_delete_features_by_oid(
+    layer: str, oids: str, auto_snapshot: bool = False
+) -> dict[str, Any]:
+    """Delete features by comma-separated OIDs in a layer (e.g. '1,2,3').
+    Set auto_snapshot=True to automatically create a backup before deletion."""
+    if auto_snapshot:
+        _call_addin("pro.createSnapshot", {"layer": layer, "oids": oids})
     return _call_addin("pro.deleteFeaturesByOid", {"layer": layer, "oids": oids})
 
 
@@ -2017,8 +2059,13 @@ def pro_add_field(
 
 
 @mcp.tool()
-def pro_delete_field(layer: str, field_name: str) -> dict[str, Any]:
-    """Delete a field from a layer's feature class. Cannot delete required fields."""
+def pro_delete_field(
+    layer: str, field_name: str, auto_snapshot: bool = False
+) -> dict[str, Any]:
+    """Delete a field from a layer's feature class. Cannot delete required fields.
+    Set auto_snapshot=True to create a snapshot of the layer before deleting the field."""
+    if auto_snapshot:
+        _call_addin("pro.createSnapshot", {"layer": layer})
     return _call_addin(
         "pro.deleteField",
         {"layer": layer, "fieldName": field_name},
@@ -2223,8 +2270,20 @@ def pro_split_features(layer: str, cut_geometry: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def pro_merge_features(layer: str, object_ids: str, target_oid: int) -> dict[str, Any]:
-    """Merge multiple features. object_ids: JSON array of OIDs, target_oid: survivor."""
+def pro_merge_features(
+    layer: str, object_ids: str, target_oid: int, auto_snapshot: bool = False
+) -> dict[str, Any]:
+    """Merge multiple features. object_ids: JSON array of OIDs, target_oid: survivor.
+    Set auto_snapshot=True to automatically create a backup before merging."""
+    if auto_snapshot:
+        # object_ids is JSON array like "[1,2,3]" → convert to "1,2,3"
+        try:
+            parsed = json.loads(object_ids)
+            if isinstance(parsed, list):
+                csv_oids = ",".join(str(oid) for oid in parsed)
+                _call_addin("pro.createSnapshot", {"layer": layer, "oids": csv_oids})
+        except (json.JSONDecodeError, TypeError):
+            _call_addin("pro.createSnapshot", {"layer": layer, "oids": object_ids})
     return _call_addin(
         "pro.mergeFeatures",
         {"layer": layer, "objectIds": object_ids, "targetOid": str(target_oid)},
@@ -2535,9 +2594,16 @@ def pro_create_feature_class(
 
 @mcp.tool()
 def pro_delete_feature_class(
-    path: str,
+    path: str, auto_snapshot: bool = False
 ) -> dict[str, Any]:
-    """Delete a feature class or table by full path."""
+    """Delete a feature class or table by full path.
+    Set auto_snapshot=True to create a snapshot before deleting the FC."""
+    if auto_snapshot:
+        try:
+            fc_name = path.rsplit("\\", 1)[-1]
+            _call_addin("pro.createSnapshot", {"layer": fc_name})
+        except Exception:
+            pass
     return _call_addin("pro.deleteFeatureClass", {"path": path})
 
 

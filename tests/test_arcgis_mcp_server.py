@@ -5431,6 +5431,119 @@ class ProToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertGreaterEqual(result["macro_count"], 4)
 
+    # --- Snapshot tests ---
+
+    def test_pro_create_snapshot(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"snapshotName": "snap_Test_20260613_120000", "layer": "Test"}):
+            result = server.pro_create_snapshot(layer="Test")
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("snapshotName", result.get("data", {}) or result)
+
+    def test_pro_create_snapshot_with_oids(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"snapshotName": "snap_Test_20260613_120000"}):
+            result = server.pro_create_snapshot(layer="Test", oids="1,2,3")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_create_snapshot_with_description(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"snapshotName": "snap_Test_20260613_120000"}):
+            result = server.pro_create_snapshot(layer="Test", description="Before merge")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_restore_snapshot(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"restored": True}):
+            result = server.pro_restore_snapshot(snapshot_name="snap_Test_001", target_layer="Test")
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result.get("data", {}).get("restored"))
+
+    def test_pro_list_snapshots(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"snapshotCount": 2, "snapshots": [{"name": "snap_A"}, {"name": "snap_B"}]}):
+            result = server.pro_list_snapshots()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result.get("data", {}).get("snapshotCount"), 2)
+
+    def test_pro_delete_snapshot(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"deleted": True}):
+            result = server.pro_delete_snapshot(snapshot_name="snap_Test_001")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_delete_features_by_oid_with_auto_snapshot(self) -> None:
+        """auto_snapshot=True calls createSnapshot before deleteFeaturesByOid."""
+        from arcgis_mcp_named_pipe import AddInOperationError
+        snapshots = []
+        def side_effect(op, args):
+            if op == "pro.createSnapshot":
+                snapshots.append(args)
+                return {"snapshotName": "snap_test"}
+            if op == "pro.deleteFeaturesByOid":
+                return {"deleted": True}
+            raise AddInOperationError(f"Unknown op: {op}")
+        with patch("arcgis_mcp_server.call_addin", side_effect=side_effect):
+            result = server.pro_delete_features_by_oid(layer="Test", oids="1,2,3", auto_snapshot=True)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual(snapshots[0]["layer"], "Test")
+
+    def test_pro_merge_features_with_auto_snapshot(self) -> None:
+        """auto_snapshot should parse JSON array OIDs and pass CSV to createSnapshot."""
+        from arcgis_mcp_named_pipe import AddInOperationError
+        snapshots = []
+        def side_effect(op, args):
+            if op == "pro.createSnapshot":
+                snapshots.append(args)
+                return {"snapshotName": "snap_test"}
+            if op == "pro.mergeFeatures":
+                return {"merged": True}
+            raise AddInOperationError(f"Unknown op: {op}")
+        with patch("arcgis_mcp_server.call_addin", side_effect=side_effect):
+            result = server.pro_merge_features(layer="Test", object_ids="[1,2,3]", target_oid=1, auto_snapshot=True)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(snapshots), 1)
+        # Should have converted JSON array to CSV
+        self.assertEqual(snapshots[0]["oids"], "1,2,3")
+
+    def test_pro_delete_field_with_auto_snapshot(self) -> None:
+        from arcgis_mcp_named_pipe import AddInOperationError
+        snapshots = []
+        def side_effect(op, args):
+            if op == "pro.createSnapshot":
+                snapshots.append(args)
+                return {"snapshotName": "snap_test"}
+            if op == "pro.deleteField":
+                return {"deleted": True}
+            raise AddInOperationError(f"Unknown op: {op}")
+        with patch("arcgis_mcp_server.call_addin", side_effect=side_effect):
+            result = server.pro_delete_field(layer="Test", field_name="OLD_FLD", auto_snapshot=True)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(snapshots), 1)
+
+    def test_pro_delete_feature_class_with_auto_snapshot(self) -> None:
+        from arcgis_mcp_named_pipe import AddInOperationError
+        snapshots = []
+        def side_effect(op, args):
+            if op == "pro.createSnapshot":
+                snapshots.append(args)
+                return {"snapshotName": "snap_test"}
+            if op == "pro.deleteFeatureClass":
+                return {"deleted": True}
+            raise AddInOperationError(f"Unknown op: {op}")
+        with patch("arcgis_mcp_server.call_addin", side_effect=side_effect):
+            result = server.pro_delete_feature_class(path="C:\\data.gdb\\TestFC", auto_snapshot=True)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_delete_features_by_oid_without_auto_snapshot(self) -> None:
+        """auto_snapshot=False (default) should NOT call createSnapshot."""
+        from arcgis_mcp_named_pipe import AddInOperationError
+        ops_called = []
+        def side_effect(op, args):
+            ops_called.append(op)
+            if op == "pro.deleteFeaturesByOid":
+                return {"deleted": True}
+            raise AddInOperationError(f"Unknown op: {op}")
+        with patch("arcgis_mcp_server.call_addin", side_effect=side_effect):
+            result = server.pro_delete_features_by_oid(layer="Test", oids="1,2,3")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(ops_called, ["pro.deleteFeaturesByOid"])
+
 
 if __name__ == "__main__":
     unittest.main()

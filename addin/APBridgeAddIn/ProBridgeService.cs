@@ -310,6 +310,10 @@ namespace APBridgeAddIn
             ["pro.runPythonScript"] = HandleRunPythonScript,
             ["pro.setEnvironment"] = HandleSetEnvironment,
             ["pro.getEnvironment"] = HandleGetEnvironment,
+            ["pro.createSnapshot"] = HandleCreateSnapshot,
+            ["pro.restoreSnapshot"] = HandleRestoreSnapshot,
+            ["pro.listSnapshots"] = HandleListSnapshots,
+            ["pro.deleteSnapshot"] = HandleDeleteSnapshot,
         };
 
         private static async Task<IpcResponse> HandleAsync(IpcRequest req, CancellationToken ct)

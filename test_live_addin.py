@@ -156,6 +156,19 @@ from arcgis_mcp_server import (
     pro_open_dockpane,
     pro_export_layout_to_file,
     pro_fly_to_location,
+    pro_ping_python_runtime,
+    pro_plugin_batch_export,
+    pro_plugin_coordinate_capture,
+    pro_plugin_feature_inspector,
+    pro_plugin_query_builder,
+    pro_plugin_field_calculator,
+    pro_run_macro,
+    pro_list_macros,
+    pro_resolve_layer,
+    pro_create_snapshot,
+    pro_restore_snapshot,
+    pro_list_snapshots,
+    pro_delete_snapshot,
 )
 
 from arcgis_mcp_named_pipe import is_addin_available, call_addin, AddInNotAvailableError
@@ -377,6 +390,28 @@ def build_tool_tests(layer: str, bookmark: str, gdb: str) -> list[tuple[str, Too
 
         # --- GP Tool ---
         ("pro.runGpTool", pro_run_gp_tool, {"tool_name": "GetCount", "parameters": json.dumps([layer])}, "Run GP tool"),
+
+        # --- In-Process Python ---
+        ("pro.pingPythonRuntime", pro_ping_python_runtime, {}, "Ping Python runtime"),
+
+        # --- Plugin Tools ---
+        ("pro.plugin.batchExport", pro_plugin_batch_export, {"target_format": "csv", "output_dir": str(PROJECT_ROOT / "temp_export")}, "Batch export CSV"),
+        ("pro.plugin.coordinateCapture", pro_plugin_coordinate_capture, {"target_wkid": 4326}, "Capture coordinates"),
+        ("pro.plugin.featureInspector", pro_plugin_feature_inspector, {"layer": layer, "oid": 1}, "Inspect feature"),
+        ("pro.plugin.queryBuilder", pro_plugin_query_builder, {"layer": layer, "field": "NAME", "value": "Test", "operator_name": "contains"}, "Query builder"),
+        ("pro.plugin.fieldCalculator", pro_plugin_field_calculator, {"layer": layer, "field": "VALUE", "expression": "!VALUE! * 2"}, "Field calculator"),
+
+        # --- Workflow Macros ---
+        ("pro.listMacros", pro_list_macros, {}, "List built-in macros"),
+        ("pro.runMacro", pro_run_macro, {"macro": "Select and Zoom"}, "Run built-in macro"),
+
+        # --- Layer Resolution ---
+        ("pro.resolveLayer", pro_resolve_layer, {"layer_hint": layer}, "Resolve layer name"),
+
+        # --- Safety Net (Snapshots) ---
+        ("pro.listSnapshots", pro_list_snapshots, {}, "List snapshots"),
+        ("pro.createSnapshot", pro_create_snapshot, {"layer": layer}, "Create snapshot"),
+        ("pro.deleteSnapshot", pro_delete_snapshot, {"snapshot_name": "snap_Test_001"}, "Delete snapshot"),
     ]
 
 

@@ -142,12 +142,16 @@ public class HandlerRegistryTests
         "pro.runPythonScript",
         "pro.setEnvironment",
         "pro.getEnvironment",
+        "pro.createSnapshot",
+        "pro.restoreSnapshot",
+        "pro.listSnapshots",
+        "pro.deleteSnapshot",
     };
 
     [Fact]
     public void AllExpectedHandlers_ArePresent()
     {
-        Assert.Equal(130, ExpectedHandlers.Length);
+        Assert.Equal(134, ExpectedHandlers.Length);
     }
 
     [Fact]
