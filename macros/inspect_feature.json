@@ -1,0 +1,27 @@
+{
+  "name": "Inspect Feature",
+  "description": "Select a feature by OID, zoom to it, and inspect its attributes.",
+  "steps": [
+    {
+      "name": "select_by_oid",
+      "op": "pro.selectByAttribute",
+      "args": {
+        "layer": "{{layer}}",
+        "where": "OBJECTID = {{oid}}"
+      }
+    },
+    {
+      "name": "zoom_to_selected",
+      "op": "pro.zoomToSelected",
+      "args": {}
+    },
+    {
+      "name": "inspect_feature",
+      "op": "pro.plugin.featureInspector",
+      "args": {
+        "layer": "{{layer}}",
+        "oid": "{{oid}}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "Select and Zoom",
+  "description": "Select features by attribute and zoom to them in one step.",
+  "steps": [
+    {
+      "name": "select_by_attribute",
+      "op": "pro.selectByAttribute",
+      "args": {
+        "layer": "{{layer}}",
+        "where": "{{where}}"
+      }
+    },
+    {
+      "name": "zoom_to_selected",
+      "op": "pro.zoomToSelected",
+      "args": {}
+    }
+  ]
+}

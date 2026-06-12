@@ -1,0 +1,14 @@
+{
+  "name": "Export All Layers",
+  "description": "Export all feature layers in the active map to CSV format using the batch export plugin.",
+  "steps": [
+    {
+      "name": "batch_export",
+      "op": "pro.plugin.batchExport",
+      "args": {
+        "targetFormat": "csv",
+        "outputDir": "{{output_dir}}"
+      }
+    }
+  ]
+}

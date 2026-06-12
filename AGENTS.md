@@ -12,8 +12,8 @@ The server has two modes. Choose based on whether the C# Add-In is available:
 
 | Mode | Tools | When to Use | Requires |
 |------|-------|-------------|----------|
-| **File-Based** | `inspect_project_context`, `execute_arcpy_code`, `buffer_features`, `clip_features` | Batch geoprocessing, automated scripts, when Pro is closed or you only need disk access | Nothing extra |
-| **Real-Time (Add-In)** | `pro_ping`, `pro_list_layers`, `pro_select_by_attribute`, `pro_create_point_feature`, etc. (126 tools) | Live map interaction, editing, selection, navigation, dynamic visualization | APBridgeAddIn installed + Pro running + Named Pipe connected |
+| **File-Based** | 21 file-based tools total | Batch geoprocessing, automated scripts, when Pro is closed or you only need disk access | Nothing extra |
+| **Real-Time (Add-In)** | `pro_ping`, `pro_list_layers`, `pro_select_by_attribute`, `pro_create_point_feature`, etc. (138 tools) | Live map interaction, editing, selection, navigation, dynamic visualization | APBridgeAddIn installed + Pro running + Named Pipe connected |
 
 Check viability: `pro_ping` returns `"status": "ok"` if Add-In is available, `"status": "unavailable"` otherwise.
 
@@ -52,7 +52,7 @@ inspect_gdb(gdb_path="path/to/data.gdb")
 
 ### 4. (Optional) Real-Time ArcGIS Pro Interaction
 
-If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to interact with the live session. 126 tools are available across 14 phases:
+If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to interact with the live session. 138 tools are available across 14+ categories:
 
 **Map & Selection (Base)**
 - `pro_ping`, `pro_get_active_map_name`, `pro_list_layers`
@@ -74,7 +74,7 @@ If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to intera
 - `pro_enable_attachments(layer)`
 
 **3D & Visualization (Phase 1, 2, 9)**
-- `pro_get_camera()`, `pro_set_camera(x, y, z)`, `pro_explore_3d(x, y, z, distance)`
+- `pro_get_camera()`, `pro_explore_3d(x, y, z, distance)`
 - `pro_set_atmosphere(fog_density)`, `pro_set_sun_position(azimuth, altitude)`
 - `pro_set_layer_elevation(layer, mode, z_offset)`, `pro_set_scene_background(r, g, b)`
 
@@ -112,7 +112,7 @@ If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to intera
 | `clip_features` | Clip GP tool | `input_features`, `clip_features`, `output_path` |
 | `execute_arcpy_code` | Run arbitrary ArcPy | `code`, `timeout_seconds` |
 
-**126 `pro.*` Add-In tools across 14 phases** — see the `README.md` for the full table. Quick reference by category:
+**138 `pro.*` Add-In tools across 18 categories** — see the `README.md` for the full table. Quick reference by category:
 
 | Category | Phase | Example Tools |
 |----------|-------|---------------|
@@ -124,6 +124,9 @@ If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to intera
 | Data Exchange | 11 | `pro_export_to_csv`, `pro_import_geo_json`, `pro_export_to_shapefile` |
 | GP & Python | 7, 14 | `pro_run_gp_tool`, `pro_run_python_script`, `pro_set_environment` |
 | GUI Automation | 12 | `pro_show_message`, `pro_activate_ribbon_tab`, `pro_open_dockpane` |
+| Plugin Tools | — | `pro_plugin_batch_export`, `pro_plugin_feature_inspector`, `pro_plugin_query_builder` |
+| Workflow Macros | — | `pro_run_macro`, `pro_list_macros` |
+| Layer Resolution | — | `pro_resolve_layer` |
 
 ## Resources
 
@@ -150,6 +153,43 @@ The server also exposes these MCP Resources:
 - For destructive operations, warn user before executing
 - Use `inspect_project_context` to get real layer/field names before generating ArcPy code
 
+## Plugin System
+
+Custom `pro.*` handlers can be added as separate C# projects under `addin/plugins/` without modifying `ProBridgeService.cs`.
+
+**5 cookbook plugins** in `addin/plugins/`:
+
+| Plugin | Tool | Description |
+|--------|------|-------------|
+| `BatchExportPlugin` | `pro.plugin.batchExport` | Export all layers to CSV/GeoJSON/SHP/KML |
+| `CoordinateCapturePlugin` | `pro.plugin.coordinateCapture` | Capture map center coords + reproject |
+| `FeatureInspectorPlugin` | `pro.plugin.featureInspector` | All attributes + geometry by OID |
+| `QueryBuilderPlugin` | `pro.plugin.queryBuilder` | SQL query builder (equals/contains/gt/lt) |
+| `FieldCalculatorPlugin` | `pro.plugin.fieldCalculator` | Calculate field via arcpy subprocess |
+| `ExamplePlugin` | `pro.plugin.hello`, `pro.plugin.mapInfo` | Starter template |
+
+**Workflow:**
+
+1. Copy `addin/plugins/ExamplePlugin/` → rename
+2. Write handler class implementing `IProBridgeHandler` with `[ProBridgeHandler("pro.yourTool")]`
+3. `dotnet build your-plugin.csproj`
+4. `package-addin.ps1 -Action install` — auto-discovers and bundles all plugins
+
+See `docs/plugin-handler-system.md` for the full guide.
+
+## Workflow Macros
+
+Run named multi-step sequences with `pro_run_macro`. Built-in macros in `macros/`:
+
+| Macro | Steps |
+|-------|-------|
+| `Select and Zoom` | Select by attribute → Zoom to selected |
+| `Export All Layers` | Batch export all layers to CSV |
+| `Inspect Feature` | Select by OID → Zoom → Inspect attributes |
+| `Capture and Project` | Capture map center → Reproject |
+
+You can also pass inline JSON or a file path to `pro_run_macro`.
+
 ## Limitations
 
 - The server cannot click around the ArcGIS Pro GUI
@@ -157,7 +197,7 @@ The server also exposes these MCP Resources:
 - `open_current_project=True` will fail with a clear error — always provide an explicit `.aprx` path
 - If Pro is open on the same `.aprx`, write operations will fail with a lock error
 - The `pro.*` tools require the APBridgeAddIn to be installed and ArcGIS Pro to be running
-- `test_project/` is excluded from git — create your own test .aprx and .gdb locally
+- `test_project/` is excluded from git — run `python test_live_addin.py --gen-fixture` to auto-build the test fixture (GDB + `.aprx`) using Pro's Python. Requires ArcGIS Pro installed and **closed** (file locked if open).
 
 ### Working with Projects
 

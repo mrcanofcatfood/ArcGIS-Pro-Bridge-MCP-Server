@@ -22,6 +22,15 @@ from arcgis_mcp_named_pipe import (
     AddInOperationError,
     call_addin,
 )
+from arcgis_name_resolver import (
+    resolve_layer_name,
+    resolve_layer_with_details,
+)
+from arcgis_workflows import (
+    execute_macro,
+    list_builtin_macros,
+    load_macro,
+)
 from arcgis_mcp_resources import (
     build_gdb_schema_resource_uri,
     build_project_context_resource_uri,
@@ -956,7 +965,10 @@ def inspect_gdb(gdb_path: str) -> dict[str, Any]:
         gdb_path = _validate_gis_path(gdb_path, "gdb_path")
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
-    result = _read_gdb_schema(gdb_path)
+    try:
+        result = _read_gdb_schema(gdb_path)
+    except ArcGISDiscoveryError as exc:
+        return {"status": "unavailable", "message": str(exc)}
     return build_resource_payload(
         result,
         resource_uri=build_gdb_schema_resource_uri(gdb_path),
@@ -1320,6 +1332,12 @@ def sensitivity_check(
     timeout_seconds: int = 1800,
 ) -> dict[str, Any]:
     """Run WLC with perturbed weights and report allocation change sensitivity."""
+    if not output_gdb:
+        return {
+            "tool": "sensitivity_check",
+            "status": "error",
+            "message": "'output_gdb' is required",
+        }
     try:
         baseline_allocation = _validate_gis_path(baseline_allocation, "baseline_allocation")
         output_gdb = _validate_gis_path(output_gdb, "output_gdb")
@@ -1379,6 +1397,12 @@ def export_suitability_map(
     timeout_seconds: int = 300,
 ) -> dict[str, Any]:
     """Create a publication-quality layout and export to PDF or PNG."""
+    if not output_path:
+        return {
+            "tool": "export_suitability_map",
+            "status": "error",
+            "message": "'output_path' is required",
+        }
     try:
         project_path = _validate_gis_path(project_path, "project_path")
         raster_path = _validate_gis_path(raster_path, "raster_path")
@@ -1447,10 +1471,86 @@ def _call_addin(op: str, args: dict[str, str] | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-@mcp.tool()
 def pro_ping_python_runtime() -> dict[str, Any]:
     """Ping the in-process Python runtime (Python.NET POC). Returns version info if available."""
     return _call_addin("pro.pingPythonRuntime", {})
+
+
+@mcp.tool()
+def pro_plugin_batch_export(target_format: str, output_dir: str) -> dict[str, Any]:
+    """Export all feature layers in the active map to a target format (csv, geojson, shapefile, kml).
+    target_format: csv/geojson/shapefile/kml
+    output_dir: directory path for exports"""
+    return _call_addin("pro.plugin.batchExport", {"targetFormat": target_format, "outputDir": output_dir})
+
+
+@mcp.tool()
+def pro_plugin_coordinate_capture(target_wkid: int | None = None) -> dict[str, Any]:
+    """Capture the center coordinates of the current map view, with optional CRS reprojection."""
+    args = {}
+    if target_wkid is not None:
+        args["targetWkid"] = str(target_wkid)
+    return _call_addin("pro.plugin.coordinateCapture", args)
+
+
+@mcp.tool()
+def pro_plugin_feature_inspector(layer: str, oid: int) -> dict[str, Any]:
+    """Inspect a single feature: return all attributes and geometry summary for a given ObjectID."""
+    return _call_addin("pro.plugin.featureInspector", {"layer": layer, "oid": str(oid)})
+
+
+@mcp.tool()
+def pro_plugin_query_builder(layer: str, field: str, value: str, operator_name: str = "equals") -> dict[str, Any]:
+    """Query features in a layer by field value. operator_name: equals/contains/gt/lt."""
+    return _call_addin("pro.plugin.queryBuilder", {"layer": layer, "field": field, "value": value, "operator": operator_name})
+
+
+@mcp.tool()
+def pro_plugin_field_calculator(layer: str, field: str, expression: str) -> dict[str, Any]:
+    """Calculate a field using a Python expression across all features in a layer."""
+    return _call_addin("pro.plugin.fieldCalculator", {"layer": layer, "field": field, "expression": expression})
+
+
+@mcp.tool()
+def pro_run_macro(macro: str, timeout_per_step: float = 10.0) -> dict[str, Any]:
+    """Execute a workflow macro - a named sequence of pro.* operations.
+
+    The macro can be:
+    1. A built-in macro name (e.g. 'Select and Zoom', 'Export All Layers')
+    2. A file path to a JSON macro file
+    3. An inline JSON macro definition
+
+    Returns per-step results including status, error messages, and data.
+    If any step fails, remaining steps are skipped."""
+    # Try loading by name or path
+    macro_def = load_macro(macro)
+
+    # Try parsing as inline JSON
+    if macro_def is None:
+        try:
+            macro_def = json.loads(macro)
+        except json.JSONDecodeError:
+            return {"status": "error", "message": f"Macro not found: '{macro}'. Use a built-in name, file path, or inline JSON."}
+
+    return execute_macro(macro_def, timeout_per_step)
+
+
+@mcp.tool()
+def pro_list_macros() -> dict[str, Any]:
+    """List all built-in workflow macros available from the macros/ directory."""
+    macros = list_builtin_macros()
+    return {"status": "ok", "macro_count": len(macros), "macros": macros}
+
+
+@mcp.tool()
+def pro_resolve_layer(layer_hint: str, cutoff: float = 0.6) -> dict[str, Any]:
+    """Resolve an approximate layer name to the exact layer name in the active map.
+    Uses fuzzy matching against all layers currently in the map.
+    Returns resolved_name, confidence score, and candidate matches."""
+    try:
+        return resolve_layer_with_details(layer_hint, cutoff)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "resolved_name": None}
 
 
 @mcp.tool()
@@ -1646,6 +1746,18 @@ def pro_add_layer_from_file(path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def pro_add_layer_from_service(
+    url: str,
+    service_type: str | None = None,
+) -> dict[str, Any]:
+    """Add a web layer from a service URL to the active ArcGIS Pro map (ArcGIS Server, WMS, etc.)."""
+    args: dict[str, str] = {"url": url}
+    if service_type:
+        args["serviceType"] = service_type
+    return _call_addin("pro.addLayerFromService", args)
+
+
+@mcp.tool()
 def pro_select_by_polygon(
     layer: str,
     coordinates: str,
@@ -1762,6 +1874,25 @@ def pro_get_features_by_extent(
     if fields:
         args["fields"] = fields
     return _call_addin("pro.getFeaturesByExtent", args)
+
+
+@mcp.tool()
+def pro_find_features(
+    layer: str,
+    where: str | None = None,
+    fields: str | None = None,
+    max_features: int = 1000,
+) -> dict[str, Any]:
+    """Query features in a layer by attribute with optional field projection."""
+    args: dict[str, str] = {
+        "layer": layer,
+        "maxFeatures": str(max_features),
+    }
+    if where:
+        args["where"] = where
+    if fields:
+        args["fields"] = fields
+    return _call_addin("pro.findFeatures", args)
 
 
 @mcp.tool()
@@ -1892,6 +2023,27 @@ def pro_delete_field(layer: str, field_name: str) -> dict[str, Any]:
         "pro.deleteField",
         {"layer": layer, "fieldName": field_name},
     )
+
+
+@mcp.tool()
+def pro_calculate_field(
+    layer: str,
+    field: str,
+    expression: str,
+    expression_type: str | None = None,
+    code_block: str | None = None,
+) -> dict[str, Any]:
+    """Calculate field values using an expression (Python, SQL, etc.)."""
+    args: dict[str, str] = {
+        "layer": layer,
+        "field": field,
+        "expression": expression,
+    }
+    if expression_type:
+        args["expressionType"] = expression_type
+    if code_block:
+        args["codeBlock"] = code_block
+    return _call_addin("pro.calculateField", args)
 
 
 @mcp.tool()

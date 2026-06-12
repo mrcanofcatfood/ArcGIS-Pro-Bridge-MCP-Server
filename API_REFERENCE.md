@@ -29,11 +29,14 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `raster_area_summary` | Area statistics by class | raster_path |
 | `sensitivity_check` | Weight perturbation sensitivity | 5 rasters + weights params |
 | `export_suitability_map` | Layout creation and export | project_path, raster_path |
+| `build_gis_resource_uri` | Build readable ArcGIS resource URI | resource_kind |
+| `generate_sync_plan` | Generate data sync plan | source_description |
+| `debug_runtime_context` | Debug runtime environment | — |
 
 ---
 ## Real-Time Add-In Tools (require APBridgeAddIn)
 
-**131 tools** across 17 categories.
+**138 tools** across 21 categories.
 
 > Tip: Use `pro_ping` to check if the Add-In is available. Returns `{"status": "ok"}` when connected, `{"status": "unavailable"}` otherwise.
 
@@ -45,6 +48,7 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `pro_get_active_map_name` | `()` | Get the name of the active map in ArcGIS Pro. |
 | `pro_list_layers` | `()` | List all layers in the active ArcGIS Pro map with visibility and type. |
 | `pro_count_features` | `(layer: 'str')` | Count features in a layer by name in the active ArcGIS Pro map. |
+| `pro_count_features_by_expression` | `(layer: 'str', where: 'str')` | Count features in a layer matching a SQL where clause. |
 | `pro_get_layer_schema` | `(layer: 'str')` | Get field schema (name, type, alias, length, precision, etc. |
 | `pro_get_selection_count` | `(layer: 'str')` | Count selected features in a layer by name. |
 | `pro_select_by_attribute` | `(layer: 'str', where: 'str')` | Select features in a layer using a SQL where clause. |
@@ -62,6 +66,7 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `pro_select_by_polygon` | `(layer: 'str', coordinates: 'str', selection_type?)` | Select features in a layer by polygon coordinates. |
 | `pro_select_by_layer` | `(target_layer: 'str', source_layer: 'str', spatial_relationship?, selection_type?)` | Select features by spatial relationship to another layer. |
 | `pro_get_features_by_extent` | `(layer: 'str', xmin: 'float', ymin: 'float', xmax: 'float', ymax: 'float', fields?, max_features?)` | Get feature attributes within a bounding box extent. |
+| `pro_find_features` | `(layer: 'str', where?, fields?, max_features?)` | Query features in a layer by attribute with optional field projection. |
 
 ### Editing
 
@@ -89,6 +94,7 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `pro_reorder_layer` | `(layer: 'str', index: 'int')` | Move a layer to the specified index in the table of contents. |
 | `pro_remove_layer` | `(layer: 'str')` | Remove a layer from the active ArcGIS Pro map by name. |
 | `pro_add_layer_from_file` | `(path: 'str')` | Add a layer from a . |
+| `pro_add_layer_from_service` | `(url: 'str', service_type?)` | Add a web layer from a service URL to the active ArcGIS Pro map (ArcGIS Server, WMS, etc. |
 | `pro_rename_layer` | `(layer: 'str', new_name: 'str')` | Rename a layer in the current map. |
 | `pro_set_layer_visibility` | `(layer: 'str', visible: 'bool')` | Set the visibility of a layer by name in the active ArcGIS Pro map. |
 | `pro_set_layer_transparency` | `(layer: 'str', transparency: 'float')` | Set layer transparency percentage (0 = opaque, 100 = fully transparent). |
@@ -129,6 +135,7 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `pro_get_layer_schema` | `(layer: 'str')` | Get field schema (name, type, alias, length, precision, etc. |
 | `pro_add_field` | `(layer: 'str', field_name: 'str', field_type: 'str', precision?, scale?, length?)` | Add a new field to a layer's feature class. |
 | `pro_delete_field` | `(layer: 'str', field_name: 'str')` | Delete a field from a layer's feature class. |
+| `pro_calculate_field` | `(layer: 'str', field: 'str', expression: 'str', expression_type?, code_block?)` | Calculate field values using an expression (Python, SQL, etc. |
 | `pro_rename_field` | `(layer: 'str', old_name: 'str', new_name: 'str')` | Rename a field on a feature layer. |
 | `pro_add_attribute_index` | `(layer: 'str', field: 'str', index_name?, unique?)` | Add an attribute index on a field for faster queries. |
 | `pro_create_feature_class` | `(gdb_path: 'str', name: 'str', geometry_type: 'str', wkid?, fields_json?)` | Create a feature class in a geodatabase (geometry_type: Point/Polyline/Polygon). |
@@ -252,6 +259,35 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `pro_get_geometry_distance` | `(x1: 'float', y1: 'float', x2: 'float', y2: 'float')` | Calculate Euclidean distance between two map coordinates. |
 | `pro_project_geometry` | `(x: 'float', y: 'float', from_wkid: 'int', to_wkid: 'int')` | Project a point from one spatial reference to another using GeometryEngine. |
 | `pro_save_project` | `()` | Save the current ArcGIS Pro project. |
+
+### In-Process Python
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `pro_ping_python_runtime` | `()` | Ping the in-process Python runtime (Python. |
+
+### Plugin Tools
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `pro_plugin_batch_export` | `(target_format: 'str', output_dir: 'str')` | Export all feature layers in the active map to a target format (csv, geojson, shapefile, kml). |
+| `pro_plugin_coordinate_capture` | `(target_wkid?)` | Capture the center coordinates of the current map view, with optional CRS reprojection. |
+| `pro_plugin_feature_inspector` | `(layer: 'str', oid: 'int')` | Inspect a single feature: return all attributes and geometry summary for a given ObjectID. |
+| `pro_plugin_query_builder` | `(layer: 'str', field: 'str', value: 'str', operator_name?)` | Query features in a layer by field value. |
+| `pro_plugin_field_calculator` | `(layer: 'str', field: 'str', expression: 'str')` | Calculate a field using a Python expression across all features in a layer. |
+
+### Workflow Macros
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `pro_run_macro` | `(macro: 'str', timeout_per_step?)` | Execute a workflow macro - a named sequence of pro. |
+| `pro_list_macros` | `()` | List all built-in workflow macros available from the macros/ directory. |
+
+### Layer Resolution
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `pro_resolve_layer` | `(layer_hint: 'str', cutoff?)` | Resolve an approximate layer name to the exact layer name in the active map. |
 
 ---
 ## Return Values

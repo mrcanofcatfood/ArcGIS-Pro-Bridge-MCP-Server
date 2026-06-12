@@ -53,6 +53,7 @@ from arcgis_mcp_server import (
     pro_set_layer_color,
     pro_remove_layer,
     pro_add_layer_from_file,
+    pro_add_layer_from_service,
     pro_select_by_polygon,
     pro_list_layouts,
     pro_get_project_properties,
@@ -95,6 +96,8 @@ from arcgis_mcp_server import (
     pro_set_layer_description,
     pro_list_scene_layer_types,
     pro_count_features_by_expression,
+    pro_find_features,
+    pro_calculate_field,
     pro_split_features,
     pro_merge_features,
     pro_run_gp_tool,
@@ -239,6 +242,7 @@ def build_tool_tests(layer: str, bookmark: str, gdb: str) -> list[tuple[str, Too
         ("pro.setLayerDescription", pro_set_layer_description, {"layer": layer, "description": "Test"}, "Set layer description"),
         ("pro.listSceneLayerTypes", pro_list_scene_layer_types, {}, "List scene layer types"),
         ("pro.countFeaturesByExpression", pro_count_features_by_expression, {"layer": layer, "where": "OBJECTID >= 0"}, "Count by expression"),
+        ("pro.addLayerFromService", pro_add_layer_from_service, {"url": "https://sampleserver.arcgisonline.com/arcgis/rest/services/World/MapServer"}, "Add layer from service"),
 
         # --- Editing ---
         ("pro.undoEdit", pro_undo_edit, {}, "Undo edit"),
@@ -261,6 +265,7 @@ def build_tool_tests(layer: str, bookmark: str, gdb: str) -> list[tuple[str, Too
         ("pro.listFieldValues", pro_list_field_values, {"layer": layer, "field": "NAME"}, "List distinct field values"),
         ("pro.addField", pro_add_field, {"layer": layer, "field_name": "TEST_FLD", "field_type": "Text", "length": 50}, "Add field"),
         ("pro.deleteField", pro_delete_field, {"layer": layer, "field_name": "TEST_FLD"}, "Delete field"),
+        ("pro.calculateField", pro_calculate_field, {"layer": layer, "field": "VALUE", "expression": "!VALUE! * 2"}, "Calculate field"),
         ("pro.renameField", pro_rename_field, {"layer": layer, "old_name": "OLD_FLD", "new_name": "NEW_FLD"}, "Rename field"),
         ("pro.addAttributeIndex", pro_add_attribute_index, {"layer": layer, "field": "OBJECTID"}, "Add attribute index"),
 
@@ -281,6 +286,7 @@ def build_tool_tests(layer: str, bookmark: str, gdb: str) -> list[tuple[str, Too
         ("pro.selectByPolygon", pro_select_by_polygon, {"layer": layer, "coordinates": "-30,-30 0,-30 0,0 -30,0 -30,-30"}, "Select by polygon"),
         ("pro.selectByLayer", pro_select_by_layer, {"target_layer": layer, "source_layer": layer}, "Select by layer (spatial)"),
         ("pro.getFeaturesByExtent", pro_get_features_by_extent, {"layer": layer, "xmin": -30, "ymin": -30, "xmax": 30, "ymax": 30}, "Get features by extent"),
+        ("pro.findFeatures", pro_find_features, {"layer": layer, "where": "OBJECTID >= 0"}, "Find features by attribute"),
 
         # --- 3D ---
         ("pro.is3d", pro_is_3d, {}, "Check if 3D scene"),
@@ -390,23 +396,28 @@ def main() -> int:
 
     # Generate fixture if requested
     if args.gen_fixture:
-        script = PROJECT_ROOT / "scripts" / "create_test_fixture.py"
-        if script.exists():
-            pro_python = r"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
-            print(f"Generating fixture with: {pro_python}")
-            result = subprocess.run([pro_python, str(script)], capture_output=True, text=True, timeout=120)
+        pro_python = r"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
+
+        gdb_script = PROJECT_ROOT / "scripts" / "create_test_fixture.py"
+        aprx_script = PROJECT_ROOT / "scripts" / "create_test_aprx.py"
+
+        for script, label in [(gdb_script, "GDB"), (aprx_script, ".aprx")]:
+            if not script.exists():
+                print(f"  {label} script not found: {script}")
+                return 1
+            print(f"  Generating {label} with: {pro_python}")
+            result = subprocess.run(
+                [pro_python, str(script)], capture_output=True, text=True, timeout=120
+            )
             print(result.stdout)
             if result.returncode != 0:
-                print(f"Fixture generation failed:\n{result.stderr}")
+                print(f"  {label} generation failed:\n{result.stderr}")
                 return 1
-        else:
-            print(f"Fixture script not found at {script}")
-            return 1
 
     # Resolve layer, bookmark, and GDB
     if args.fixture:
         fixture_aprx = FIXTURE_DIR / "TestFixture.aprx"
-        fixture_gdb = FIXTURE_DIR / "TestFixture.gdb"
+        fixture_gdb = FIXTURE_DIR / "TestFixture" / "TestFixture.gdb"
         if not fixture_gdb.exists():
             print(f"Fixture GDB not found at {fixture_gdb}")
             print("Run with --gen-fixture to generate it, or use --layer / --gdb directly.")

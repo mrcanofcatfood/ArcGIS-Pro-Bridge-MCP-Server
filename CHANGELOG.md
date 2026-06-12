@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.5.3 - 2026-06-13
+
+### Added — 4 Major Features
+
+#### Feature 5: Handlers.cs Split into Domain Partial Files
+- `ProBridgeService.Handlers.cs` (4121 lines) split into **11 domain partial class files**:
+  `Map.cs`, `Selection.cs`, `Editing.cs`, `Layers.cs`, `Scene3D.cs`, `Layouts.cs`, `Schema.cs`, `Geoprocessing.cs`, `DataExchange.cs`, `Gui.cs`, `TimeQuery.cs`
+- Original `Handlers.cs` now an empty shell placeholder
+- `dotnet build` — 0 errors
+
+#### Feature 2: Plugin Cookbook — 5 Example Plugins
+| Plugin | Tool Op | Description |
+|--------|---------|-------------|
+| `BatchExportPlugin` | `pro.plugin.batchExport` | Export all layers to CSV/GeoJSON/SHP/KML |
+| `CoordinateCapturePlugin` | `pro.plugin.coordinateCapture` | Capture map center coords + reproject |
+| `FeatureInspectorPlugin` | `pro.plugin.featureInspector` | All attributes + geometry by OID |
+| `QueryBuilderPlugin` | `pro.plugin.queryBuilder` | SQL query builder (equals/contains/gt/lt) |
+| `FieldCalculatorPlugin` | `pro.plugin.fieldCalculator` | Calculate field via arcpy subprocess |
+- 5 Python `@mcp.tool()` wrappers (`pro_plugin_*`)
+- 16 plugin tests (all passing)
+
+#### Feature 3: Natural Language Layer/Field Resolution
+- `arcgis_name_resolver.py` — `resolve_layer_name()`, `resolve_field_name()`, `resolve_layer_with_details()`
+- Case-insensitive fuzzy matching via `difflib.get_close_matches()`
+- `pro_resolve_layer(layer_hint, cutoff?)` MCP tool
+- 12 resolve tests (all passing)
+
+#### Feature 4: Workflow Macros
+- `arcgis_workflows.py` — macro engine with `execute_macro()`, `load_macro()`, `list_builtin_macros()`
+- `pro_run_macro(macro, timeout_per_step?)` and `pro_list_macros()` MCP tools
+- 4 built-in macros in `macros/`: Select and Zoom, Export All Layers, Inspect Feature, Capture and Project
+- Supports built-in names, file paths, or inline JSON
+- 12 macro tests (all passing)
+
+### Added — 3 Additional Handlers Unblocked
+
+| Handler | Approach | Confidence |
+|---------|----------|:----------:|
+| `pro.createMap(mapName, mapType, basemap?)` | Pro SDK: `MapFactory.Instance.CreateMap()` on QueuedTask — **not blocked** as previously thought | High |
+| `pro.mergeFeatures(layer, objectIds, targetOid)` | arcpy: `da.SearchCursor` + `geometry.union()` + `da.UpdateCursor` via subprocess | High |
+| `pro.addBasemap` | Fixed bug: `ArcGISProject('CURRENT')` → `ArcGISProject(proj_path)` with explicit project path | Fixed |
+
+### Fixed — 4 CHANGELOG/Code Contradictions from v0.5.2
+- **`pro.createBookmark`** — stub was still returning an error. Now uses `CIMBookmark` + `Map.AddBookmark()` via `QueuedTask.Run`.
+- **`pro.listStandaloneTables`** — stub was still returning an error. Now uses `MapView.Active.Map.StandaloneTables` via `QueuedTask.Run`.
+- **`pro.openAttributeTable`** — stub was still returning an error. Now opens `esri_mapping_tableWindow` dockpane via `FrameworkApplication.DockPaneManager.Find()`.
+- **`pro.setLayerDescription`** — stub was still returning an error. Now uses `GetDefinition()`/`Clone()`/`SetDefinition()` CIM modification pattern.
+
+### Fixed — 4 Layout Element Handlers Unblocked via Subprocess arcpy
+- **`pro.addLayoutText(layoutName, text, x, y)`** — creates a text element using `layout.createTextElement()` via arcpy subprocess.
+- **`pro.addLayoutPicture(layoutName, imagePath, x, y)`** — creates a picture element using `layout.createPictureElement()` via arcpy subprocess.
+- **`pro.addLayoutLegend(layoutName, mapFrameName, x, y)`** — creates a legend using `layout.createMapSurroundElement(mf, 'LEGEND')` via arcpy subprocess.
+- **`pro.addLayoutNorthArrow(layoutName, mapFrameName, x, y)`** — creates a north arrow using `layout.createMapSurroundElement(mf, 'NORTH_ARROW')` via arcpy subprocess.
+- `LayoutElementFactory` confirmed unavailable in Pro 3.6 SDK (not exposed); arcpy subprocess is the only viable path.
+
+### Fixed — 1 Bug in Existing Handler
+- **`pro.addBasemap`** was using `ArcGISProject('CURRENT')` in the arcpy subprocess call — this only works inside Pro's Python window, not from a subprocess. Now uses `Project.Current.Path` to pass the explicit `.aprx` path.
+
+### Changed
+- **`ProBridgeService.cs`** — monolithic 4588-line file split into 2 partials: `ProBridgeService.cs` (core + Python utilities, 583 lines) + `ProBridgeService.Handlers.cs` (all handlers, 4031 lines). Both compile to the same class.
+- **CHANGELOG.md v0.5.2** — corrected to reflect `listStandaloneTables`, `setLayerDescription`, `createBookmark`, and `openAttributeTable` were NOT actually fixed in that release.
+- **LIMITATIONS.md** — truly blocked count reduced from ~16 to ~14; `createMap` moved to "Previously Blocked — Now Fixed" section; `mergeFeatures` moved to "Previously Blocked" with arcpy workaround.
+- **23 new Python tests** added: `detect_arcgis_environment` (2), `build_gis_resource_uri` (6), `inspect_gdb` (3), `execute_arcpy_code` (5), `generate_sync_plan` (3), `pro_ping_python_runtime` (4).
+- **Production bug fix** — `inspect_gdb` was missing `ArcGISDiscoveryError` handling around `_read_gdb_schema`.
+- **API_REFERENCE.md** — tool count corrected from 128 to 130.
+- **README.md, AGENTS.md** — tool count corrected from 127/128 to 130.
+
+### Changed
+- **README.md** — tool count updated from 130 to 138; architecture diagram updated; 3 new categories (Plugin Tools, Workflow Macros, Layer Resolution)
+- **AGENTS.md** — tool count updated; plugin cookbook table added; workflow macros section added; category table expanded
+- **API_REFERENCE.md** — regenerated with 138 tools across 21 categories (3 new: Plugin Tools, Workflow Macros, Layer Resolution); file-based tools count corrected to 21 (was 18 in generator)
+- **docs/plugin-handler-system.md** — cookbook plugin table added; implementation status updated to 6 projects
+- **scripts/generate_api_docs.py** — added 3 missing file-based tools (`build_gis_resource_uri`, `generate_sync_plan`, `debug_runtime_context`); added 3 new pro.* categories
+
+### Test Coverage
+- **639 Python tests** — all passing (23 + 16 plugin + 12 resolve + 12 macro = 63 new)
+- **14 C# tests** — all passing (handler registry updated for 130 handlers)
+- **Build** — 0 errors, pre-existing CS1998 warnings
+
+## 0.5.2 - 2026-06-10
+
+### Added — 2 Previously Blocked APIs Now Unblocked
+
+| Handler | Status | Approach |
+|---------|--------|---------|
+| `pro.setEnvironment` | ✅ Fixed | In-process Python: `arcpy.env.{key} = value` via `Py.GIL()` |
+| `pro.getEnvironment` | ✅ Fixed | In-process Python: `arcpy.env.{key}` via `Py.GIL()` |
+
+### Changed
+- `ProBridgeService.cs` — 2 handler stubs replaced with real implementations
+
+### Notes
+- `pro.listStandaloneTables`, `pro.setLayerDescription`, `pro.createBookmark`, and `pro.openAttributeTable` were listed as fixed in this release but remained as stubs in code. These are actually fixed in v0.5.3.
+
 ## 0.5.1 - 2026-06-10
 
 ### Added — Phase 3: In-Process Python Proof of Concept

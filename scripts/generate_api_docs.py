@@ -20,12 +20,14 @@ import arcgis_mcp_server as server
 TOOLS_CATEGORIES = {
     "Map & Selection": [
         "pro_ping", "pro_get_active_map_name", "pro_list_layers",
-        "pro_count_features", "pro_get_layer_schema", "pro_get_selection_count",
+        "pro_count_features", "pro_count_features_by_expression",
+        "pro_get_layer_schema", "pro_get_selection_count",
         "pro_select_by_attribute", "pro_clear_selection", "pro_zoom_to_layer",
         "pro_get_current_extent", "pro_pan_to_extent", "pro_get_camera",
         "pro_set_layer_visibility", "pro_get_layer_extent", "pro_select_by_rectangle",
         "pro_switch_selection", "pro_get_feature_by_oid", "pro_get_active_tool",
         "pro_select_by_polygon", "pro_select_by_layer", "pro_get_features_by_extent",
+        "pro_find_features",
     ],
     "Editing": [
         "pro_undo_edit", "pro_redo_edit", "pro_get_edit_state",
@@ -37,7 +39,7 @@ TOOLS_CATEGORIES = {
     ],
     "Layer Management": [
         "pro_reorder_layer", "pro_remove_layer", "pro_add_layer_from_file",
-        "pro_rename_layer", "pro_set_layer_visibility",
+        "pro_add_layer_from_service", "pro_rename_layer", "pro_set_layer_visibility",
         "pro_set_layer_transparency", "pro_set_layer_color",
         "pro_set_labels_enabled", "pro_get_layer_renderer",
         "pro_get_layer_extent", "pro_get_layer_description",
@@ -55,7 +57,7 @@ TOOLS_CATEGORIES = {
     ],
     "Schema Management": [
         "pro_get_layer_schema", "pro_add_field", "pro_delete_field",
-        "pro_rename_field", "pro_add_attribute_index",
+        "pro_calculate_field", "pro_rename_field", "pro_add_attribute_index",
         "pro_create_feature_class", "pro_delete_feature_class",
         "pro_list_subtypes", "pro_set_subtype_field",
     ],
@@ -108,6 +110,20 @@ TOOLS_CATEGORIES = {
         "pro_get_project_properties", "pro_get_geometry_distance",
         "pro_project_geometry", "pro_save_project",
     ],
+    "In-Process Python": [
+        "pro_ping_python_runtime",
+    ],
+    "Plugin Tools": [
+        "pro_plugin_batch_export", "pro_plugin_coordinate_capture",
+        "pro_plugin_feature_inspector", "pro_plugin_query_builder",
+        "pro_plugin_field_calculator",
+    ],
+    "Workflow Macros": [
+        "pro_run_macro", "pro_list_macros",
+    ],
+    "Layer Resolution": [
+        "pro_resolve_layer",
+    ],
 }
 
 # Non-pro tools
@@ -130,6 +146,9 @@ GIS_TOOLS = [
     ("raster_area_summary", "Area statistics by class", "raster_path"),
     ("sensitivity_check", "Weight perturbation sensitivity", "5 rasters + weights params"),
     ("export_suitability_map", "Layout creation and export", "project_path, raster_path"),
+    ("build_gis_resource_uri", "Build readable ArcGIS resource URI", "resource_kind"),
+    ("generate_sync_plan", "Generate data sync plan", "source_description"),
+    ("debug_runtime_context", "Debug runtime environment", None),
 ]
 
 
@@ -181,7 +200,8 @@ def main() -> int:
     lines.append("---")
     lines.append("## Real-Time Add-In Tools (require APBridgeAddIn)")
     lines.append("")
-    lines.append(f"**{sum(len(v) for v in TOOLS_CATEGORIES.values())} tools** across {len(TOOLS_CATEGORIES)} categories.")
+    unique_tools = len({t for tools in TOOLS_CATEGORIES.values() for t in tools})
+    lines.append(f"**{unique_tools} tools** across {len(TOOLS_CATEGORIES)} categories.")
     lines.append("")
     lines.append("> Tip: Use `pro_ping` to check if the Add-In is available. Returns `{\"status\": \"ok\"}` when connected, `{\"status\": \"unavailable\"}` otherwise.")
     lines.append("")

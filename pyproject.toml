@@ -1,6 +1,6 @@
 [project]
 name = "arcgis-pro-bridge-mcp"
-version = "0.5.1"
+version = "0.5.3"
 description = "Python MCP server bridging AI agents with local ArcGIS Pro."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,6 +12,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
   "mcp[cli]>=1.9.4",

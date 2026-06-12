@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -8,10 +9,11 @@ namespace ArcGisProBridge.Tests;
 
 public class HandlerRegistryTests
 {
-    // All 126 expected handler op keys — kept in sync with ProBridgeService.cs _handlers dictionary
+    // All 130 expected handler op keys — kept in sync with ProBridgeService.cs _handlers dictionary
     private static readonly string[] ExpectedHandlers =
     {
         "pro.ping",
+        "pro.pingPythonRuntime",
         "pro.getActiveMapName",
         "pro.listLayers",
         "pro.countFeatures",
@@ -36,6 +38,7 @@ public class HandlerRegistryTests
         "pro.setLayerColor",
         "pro.removeLayer",
         "pro.addLayerFromFile",
+        "pro.addLayerFromService",
         "pro.selectByPolygon",
         "pro.listLayouts",
         "pro.getProjectProperties",
@@ -44,6 +47,7 @@ public class HandlerRegistryTests
         "pro.getAllMapNames",
         "pro.getMapFrame",
         "pro.selectByLayer",
+        "pro.findFeatures",
         "pro.getFeaturesByExtent",
         "pro.deleteFeaturesByOid",
         "pro.updateFeatureAttributes",
@@ -64,6 +68,7 @@ public class HandlerRegistryTests
         "pro.listFieldValues",
         "pro.addField",
         "pro.deleteField",
+        "pro.calculateField",
         "pro.createPolygonFeature",
         "pro.createLineFeature",
         "pro.setMapScale",
@@ -142,7 +147,7 @@ public class HandlerRegistryTests
     [Fact]
     public void AllExpectedHandlers_ArePresent()
     {
-        Assert.Equal(126, ExpectedHandlers.Length);
+        Assert.Equal(130, ExpectedHandlers.Length);
     }
 
     [Fact]
@@ -203,5 +208,22 @@ public class HandlerRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(damlId));
             Assert.StartsWith("esri_", damlId);
         }
+    }
+
+    [Fact]
+    public void ProBridgeHandlerAttribute_StoresOp()
+    {
+        var attr = new ProBridgeHandlerAttribute("pro.test");
+        Assert.Equal("pro.test", attr.Op);
+    }
+
+    [Fact]
+    public void ProBridgeHandlerAttribute_HasCorrectUsage()
+    {
+        var usage = (AttributeUsageAttribute)typeof(ProBridgeHandlerAttribute)
+            .GetCustomAttributes(typeof(AttributeUsageAttribute), inherit: false)
+            .First();
+        Assert.Equal(AttributeTargets.Class, usage.ValidOn);
+        Assert.False(usage.Inherited);
     }
 }

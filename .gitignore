@@ -57,3 +57,6 @@ tests-cs/bin/
 tests-cs/obj/
 addin/APBridgeAddIn/bin/
 addin/APBridgeAddIn/obj/
+# Plugin project build output
+addin/plugins/**/bin/
+addin/plugins/**/obj/

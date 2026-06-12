@@ -25,6 +25,24 @@ function Package {
         $src = Join-Path $outDir $dll
         if (Test-Path $src) { Copy-Item $src (Join-Path $tempDir "Install\$dll") }
     }
+    # Build and collect plugin DLLs
+    $pluginsDir = Join-Path $projDir "..\plugins"
+    if (Test-Path $pluginsDir) {
+        Get-ChildItem $pluginsDir -Directory | ForEach-Object {
+            $pluginProj = Join-Path $_.FullName "*.csproj"
+            $csproj = Get-ChildItem $pluginProj | Select-Object -First 1
+            if ($csproj) {
+                Write-Output "  Building plugin: $($_.Name)..."
+                $pluginOut = Join-Path $_.FullName "bin\Debug\net8.0-windows8.0"
+                & dotnet build $csproj.FullName --no-restore -v q 2>&1 | Out-Null
+                $pluginDll = Join-Path $pluginOut "$($_.Name).dll"
+                if (Test-Path $pluginDll) {
+                    Copy-Item $pluginDll (Join-Path $tempDir "Install\$($_.Name).dll")
+                    Write-Output "    -> $($_.Name).dll"
+                }
+            }
+        }
+    }
     if (Test-Path $esriAddinX) { Remove-Item $esriAddinX }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $esriAddinX)

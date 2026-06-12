@@ -18,21 +18,22 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_DIR = PROJECT_ROOT / "test_project"
+FIXTURE_GDB_DIR = FIXTURE_DIR / "TestFixture"
 
 
 def main() -> int:
     import arcpy
     from arcpy import mp
 
-    FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+    FIXTURE_GDB_DIR.mkdir(parents=True, exist_ok=True)
 
     aprx_path = str(FIXTURE_DIR / "TestFixture.aprx")
-    gdb_path = str(FIXTURE_DIR / "TestFixture.gdb")
+    gdb_path = str(FIXTURE_GDB_DIR / "TestFixture.gdb")
 
-    # Create GDB
+    # Create GDB (nested inside TestFixture/ folder)
     if arcpy.Exists(gdb_path):
         arcpy.Delete_management(gdb_path)
-    arcpy.CreateFileGDB_management(str(FIXTURE_DIR), "TestFixture.gdb")
+    arcpy.CreateFileGDB_management(str(FIXTURE_GDB_DIR), "TestFixture.gdb")
     print(f"Created: {gdb_path}")
 
     # Create feature classes
@@ -132,6 +133,7 @@ def main() -> int:
         print()
         print(f"Or run this script through the Add-In's runPythonScript tool.")
         print(f"  GDB is ready: {gdb_path}")
+        print(f"  Note: GDB is nested under test_project\\TestFixture\\ to comply with ArcGIS path conventions.")
 
     return 0
 

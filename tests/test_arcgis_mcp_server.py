@@ -377,6 +377,46 @@ class ResourceHelpersTests(unittest.TestCase):
         self.assertEqual(layer["source_status"]["workspace_factory"], "FileGDB")
 
 
+    def test_build_gis_resource_uri_project_layers(self) -> None:
+        payload = server.build_gis_resource_uri(
+            resource_kind="project_layers", path=r"D:\GIS\Projects\City.aprx"
+        )
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["resource_kind"], "project_layers")
+        self.assertIn("arcgis://", payload["resource_uri"])
+
+    def test_build_gis_resource_uri_project_context(self) -> None:
+        payload = server.build_gis_resource_uri(
+            resource_kind="project_context", path=r"D:\GIS\Projects\Atlas.aprx"
+        )
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["resource_kind"], "project_context")
+
+    def test_build_gis_resource_uri_gdb_schema(self) -> None:
+        payload = server.build_gis_resource_uri(
+            resource_kind="gdb_schema", path=r"D:\GIS\Data\demo.gdb"
+        )
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["resource_kind"], "gdb_schema")
+
+    def test_build_gis_resource_uri_gdb_schema_requires_path(self) -> None:
+        payload = server.build_gis_resource_uri(resource_kind="gdb_schema")
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("requires a gdb path", payload["message"])
+
+    def test_build_gis_resource_uri_unsupported_kind(self) -> None:
+        payload = server.build_gis_resource_uri(resource_kind="invalid")
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("Unsupported", payload["message"])
+
+    def test_build_gis_resource_uri_current_project(self) -> None:
+        payload = server.build_gis_resource_uri(
+            resource_kind="project_layers", open_current_project=True
+        )
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["resource_uri"], "arcgis://project/current/layers")
+
+
 class DiagnosticToolTests(unittest.TestCase):
     def test_ping_returns_ok(self) -> None:
         payload = server.ping()
@@ -453,6 +493,32 @@ class DiagnosticToolTests(unittest.TestCase):
         self.assertEqual(payload["server"], server.SERVER_NAME)
         self.assertIn("context", payload)
         self.assertIn("cwd", payload["context"])
+
+    def test_detect_arcgis_environment_returns_ready_when_discovery_succeeds(self) -> None:
+        python_info = server.ArcGISPythonInfo(
+            install_dir=r"D:\Program Files\ArcGIS\Pro",
+            python_executable=(
+                r"D:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
+            ),
+            source="registry:SOFTWARE\\ESRI\\ArcGISPro",
+        )
+        with patch("arcgis_mcp_server.discover_arcgis_pro_python", return_value=python_info):
+            payload = server.detect_arcgis_environment()
+
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["arcgis"]["install_dir"], python_info.install_dir)
+        self.assertEqual(payload["arcgis"]["source"], python_info.source)
+        self.assertIn("resource_catalog_uri", payload)
+
+    def test_detect_arcgis_environment_returns_unavailable_on_discovery_error(self) -> None:
+        with patch(
+            "arcgis_mcp_server.discover_arcgis_pro_python",
+            side_effect=server.ArcGISDiscoveryError("Not found"),
+        ):
+            payload = server.detect_arcgis_environment()
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertIn("Not found", payload["message"])
 
 
 class ProjectContextToolTests(unittest.TestCase):
@@ -1136,6 +1202,118 @@ class ExportSuitabilityMapToolTests(unittest.TestCase):
         self.assertEqual(payload["status"], "unavailable")
 
 
+class InspectGdbToolTests(unittest.TestCase):
+    """Tests for the inspect_gdb MCP tool."""
+
+    def test_returns_success_with_schema_data(self) -> None:
+        execution_result = server.ArcPyExecutionResult(
+            status="success",
+            exit_code=0,
+            python_executable=sys.executable,
+            stdout="",
+            stderr="",
+            data={
+                "workspace": r"D:\GIS\Data\demo.gdb",
+                "tables": [
+                    {"name": "Parcels", "fields": [{"name": "ZONE", "type": "String"}]},
+                ],
+            },
+        )
+        with patch("arcgis_mcp_server._read_gdb_schema", return_value=execution_result):
+            payload = server.inspect_gdb(gdb_path=r"D:\GIS\Data\demo.gdb")
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["resource_kind"], "gdb_schema")
+        self.assertEqual(payload["data"]["workspace"], str(Path(r"D:\GIS\Data\demo.gdb").resolve()))
+
+    def test_returns_unavailable_when_discovery_fails(self) -> None:
+        with patch(
+            "arcgis_mcp_server._read_gdb_schema",
+            side_effect=server.ArcGISDiscoveryError("GDB not accessible"),
+        ):
+            payload = server.inspect_gdb(gdb_path=r"D:\GIS\Data\demo.gdb")
+        self.assertEqual(payload["status"], "unavailable")
+
+    def test_returns_error_on_invalid_path(self) -> None:
+        payload = server.inspect_gdb(gdb_path="bad\x00path")
+        self.assertEqual(payload["status"], "error")
+
+
+class ExecuteArcPyCodeToolTests(unittest.TestCase):
+    """Tests for the execute_arcpy_code MCP tool."""
+
+    def test_returns_success_with_execution_result(self) -> None:
+        execution_result = server.ArcPyExecutionResult(
+            status="success",
+            exit_code=0,
+            python_executable=sys.executable,
+            stdout="Hello from ArcPy",
+            stderr="",
+            data={"product_name": "ArcGISPro"},
+        )
+        with patch("arcgis_mcp_server.run_in_arcgis_env", return_value=execution_result):
+            payload = server.execute_arcpy_code(code="print('hello')")
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["stdout"], "Hello from ArcPy")
+
+    def test_returns_unavailable_when_discovery_fails(self) -> None:
+        with patch(
+            "arcgis_mcp_server.run_in_arcgis_env",
+            side_effect=server.ArcGISDiscoveryError("Python not found"),
+        ):
+            payload = server.execute_arcpy_code(code="print('hello')")
+        self.assertEqual(payload["status"], "unavailable")
+
+    def test_returns_error_on_invalid_workspace_path(self) -> None:
+        payload = server.execute_arcpy_code(code="print('hello')", workspace="bad\x00path")
+        self.assertEqual(payload["status"], "error")
+
+    def test_returns_error_on_invalid_project_path(self) -> None:
+        payload = server.execute_arcpy_code(code="print('hello')", project_path="bad\x00path")
+        self.assertEqual(payload["status"], "error")
+
+    def test_forwards_workspace_and_project_path(self) -> None:
+        execution_result = server.ArcPyExecutionResult(
+            status="success",
+            exit_code=0,
+            python_executable=sys.executable,
+            stdout="",
+            stderr="",
+        )
+        with patch("arcgis_mcp_server.run_in_arcgis_env", return_value=execution_result) as mock_run:
+            server.execute_arcpy_code(
+                code="import arcpy",
+                workspace=r"D:\GIS\scratch.gdb",
+                project_path=r"D:\GIS\project.aprx",
+                timeout_seconds=60,
+            )
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        self.assertIn("import arcpy", kwargs.get("code", args[0]))
+        self.assertEqual(kwargs.get("workspace"), r"D:\GIS\scratch.gdb")
+        self.assertEqual(kwargs.get("project_path"), r"D:\GIS\project.aprx")
+
+
+class SyncPlanToolTests(unittest.TestCase):
+    """Tests for the generate_sync_plan MCP tool."""
+
+    def test_returns_todo_status(self) -> None:
+        payload = server.generate_sync_plan(source_description="CSV export")
+        self.assertEqual(payload["status"], "todo")
+        self.assertIn("not yet implemented", payload["message"])
+
+    def test_returns_source_description(self) -> None:
+        payload = server.generate_sync_plan(source_description="Shapefile batch")
+        self.assertEqual(payload["source_description"], "Shapefile batch")
+
+    def test_handles_project_context_param(self) -> None:
+        payload = server.generate_sync_plan(
+            source_description="GeoJSON files",
+            project_context=r"D:\GIS\project.aprx",
+        )
+        self.assertEqual(payload["status"], "todo")
+        self.assertEqual(payload["project_context"], r"D:\GIS\project.aprx")
+
+
 class NamedPipeModuleTests(unittest.TestCase):
     """Tests for the arcgis_mcp_named_pipe module."""
 
@@ -1643,6 +1821,44 @@ class ProToolsTests(unittest.TestCase):
             {"path": r"D:\data\buildings.lyrx"},
         )
 
+    # --- pro_add_layer_from_service ---
+
+    def test_pro_add_layer_from_service_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layer_from_service(url="https://example.com/arcgis/rest/services/MapServer")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_add_layer_from_service_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True, "layerName": "WebLayer"}):
+            result = server.pro_add_layer_from_service(url="https://example.com/arcgis/rest/services/MapServer")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_add_layer_from_service_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_add_layer_from_service(url="https://example.com/arcgis/rest/services/MapServer")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_add_layer_from_service_forwards_op_and_url(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layer_from_service(
+                url="https://sampleserver.arcgisonline.com/arcgis/rest/services/World/MapServer"
+            )
+        mock_call.assert_called_once_with(
+            "pro.addLayerFromService",
+            {"url": "https://sampleserver.arcgisonline.com/arcgis/rest/services/World/MapServer"},
+        )
+
+    def test_pro_add_layer_from_service_forwards_service_type(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_add_layer_from_service(
+                url="https://example.com/wms",
+                service_type="WMS",
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["serviceType"], "WMS")
+
     # --- Phase 1: pro_select_by_polygon ---
 
     def test_pro_select_by_polygon_returns_unavailable_when_pipe_unreachable(self) -> None:
@@ -1948,6 +2164,53 @@ class ProToolsTests(unittest.TestCase):
             )
         call_args = mock_call.call_args[0][1]
         self.assertEqual(call_args["fields"], "NAME,TYPE")
+
+    # --- pro_find_features ---
+
+    def test_pro_find_features_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_find_features(layer="Parcels")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_find_features_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_find_features(layer="Parcels")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_find_features_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_find_features(layer="Parcels")
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_find_features_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_find_features(
+                layer="Roads",
+                where="OBJECTID >= 0",
+                fields="NAME,TYPE",
+                max_features=500,
+            )
+        call_args = mock_call.call_args[0]
+        self.assertEqual(call_args[0], "pro.findFeatures")
+        self.assertEqual(call_args[1]["layer"], "Roads")
+        self.assertEqual(call_args[1]["where"], "OBJECTID >= 0")
+        self.assertEqual(call_args[1]["fields"], "NAME,TYPE")
+        self.assertEqual(call_args[1]["maxFeatures"], "500")
+
+    def test_pro_find_features_forwards_default_max_features(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_find_features(layer="Roads")
+        call_args = mock_call.call_args[0][1]
+        self.assertEqual(call_args["maxFeatures"], "1000")
+
+    def test_pro_find_features_omits_optional_params_when_not_given(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_find_features(layer="Roads")
+        call_args = mock_call.call_args[0][1]
+        self.assertNotIn("where", call_args)
+        self.assertNotIn("fields", call_args)
 
     # --- Phase 2: pro_delete_features_by_oid ---
 
@@ -2302,6 +2565,58 @@ class ProToolsTests(unittest.TestCase):
             "pro.deleteField",
             {"layer": "Parcels", "fieldName": "DEPRECATED"},
         )
+
+    # --- pro_calculate_field ---
+
+    def test_pro_calculate_field_returns_unavailable_when_pipe_unreachable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_calculate_field(
+                layer="Parcels", field="AREA", expression="!SHAPE.AREA!"
+            )
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_calculate_field_returns_ok_when_pipe_reachable(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_calculate_field(
+                layer="Parcels", field="AREA", expression="!SHAPE.AREA!"
+            )
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_calculate_field_returns_error_on_operation_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_calculate_field(
+                layer="Parcels", field="AREA", expression="!SHAPE.AREA!"
+            )
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_calculate_field_forwards_correct_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_calculate_field(
+                layer="Roads",
+                field="LENGTH",
+                expression="!Shape_Length! * 3.28084",
+                expression_type="PYTHON3",
+            )
+        mock_call.assert_called_once_with(
+            "pro.calculateField",
+            {
+                "layer": "Roads",
+                "field": "LENGTH",
+                "expression": "!Shape_Length! * 3.28084",
+                "expressionType": "PYTHON3",
+            },
+        )
+
+    def test_pro_calculate_field_omits_optional_params(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_calculate_field(
+                layer="Roads", field="LENGTH", expression="!Shape_Length!"
+            )
+        call_args = mock_call.call_args[0][1]
+        self.assertNotIn("expressionType", call_args)
+        self.assertNotIn("codeBlock", call_args)
 
     # --- Phase 4: pro_create_polygon_feature ---
 
@@ -4268,12 +4583,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_list_domains_ok(self) -> None:
-        result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
+        assert result["status"] == "ok"
 
     def test_pro_list_domains_error(self) -> None:
-        result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_domains(gdb_path=r"C:\data\test.gdb")
+        assert result["status"] == "error"
 
     def test_pro_list_domains_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4296,24 +4614,27 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_create_domain_ok(self) -> None:
-        result = server.pro_create_domain(
-            gdb_path=r"C:\data\test.gdb",
-            name="ZoneType",
-            description="Zone type codes",
-            field_type="String",
-            coded_values='{"R":"Residential","C":"Commercial"}',
-        )
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_create_domain(
+                gdb_path=r"C:\data\test.gdb",
+                name="ZoneType",
+                description="Zone type codes",
+                field_type="String",
+                coded_values='{"R":"Residential","C":"Commercial"}',
+            )
+        assert result["status"] == "ok"
 
     def test_pro_create_domain_error(self) -> None:
-        result = server.pro_create_domain(
-            gdb_path=r"C:\data\test.gdb",
-            name="ZoneType",
-            description="Zone type codes",
-            field_type="String",
-            coded_values='{"R":"Residential","C":"Commercial"}',
-        )
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_create_domain(
+                gdb_path=r"C:\data\test.gdb",
+                name="ZoneType",
+                description="Zone type codes",
+                field_type="String",
+                coded_values='{"R":"Residential","C":"Commercial"}',
+            )
+        assert result["status"] == "error"
 
     def test_pro_create_domain_forwards_op_and_args(self) -> None:
         cv_json = '{"R":"Residential","C":"Commercial"}'
@@ -4345,16 +4666,19 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_assign_domain_to_field_ok(self) -> None:
-        result = server.pro_assign_domain_to_field(
-            layer="Parcels", field="ZoneCode", domain_name="ZoneType"
-        )
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_assign_domain_to_field(
+                layer="Parcels", field="ZoneCode", domain_name="ZoneType"
+            )
+        assert result["status"] == "ok"
 
     def test_pro_assign_domain_to_field_error(self) -> None:
-        result = server.pro_assign_domain_to_field(
-            layer="Parcels", field="ZoneCode", domain_name="ZoneType"
-        )
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_assign_domain_to_field(
+                layer="Parcels", field="ZoneCode", domain_name="ZoneType"
+            )
+        assert result["status"] == "error"
 
     def test_pro_assign_domain_to_field_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4373,12 +4697,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_list_subtypes_ok(self) -> None:
-        result = server.pro_list_subtypes(layer="Parcels")
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_list_subtypes(layer="Parcels")
+        assert result["status"] == "ok"
 
     def test_pro_list_subtypes_error(self) -> None:
-        result = server.pro_list_subtypes(layer="Parcels")
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_subtypes(layer="Parcels")
+        assert result["status"] == "error"
 
     def test_pro_list_subtypes_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4395,12 +4722,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_set_subtype_field_ok(self) -> None:
-        result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
+        assert result["status"] == "ok"
 
     def test_pro_set_subtype_field_error(self) -> None:
-        result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_subtype_field(layer="Parcels", field="ZoneCode")
+        assert result["status"] == "error"
 
     def test_pro_set_subtype_field_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4417,12 +4747,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_enable_attachments_ok(self) -> None:
-        result = server.pro_enable_attachments(layer="Parcels")
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_enable_attachments(layer="Parcels")
+        assert result["status"] == "ok"
 
     def test_pro_enable_attachments_error(self) -> None:
-        result = server.pro_enable_attachments(layer="Parcels")
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_enable_attachments(layer="Parcels")
+        assert result["status"] == "error"
 
     def test_pro_enable_attachments_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4441,12 +4774,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_list_toolboxes_ok(self) -> None:
-        result = server.pro_list_toolboxes()
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_list_toolboxes()
+        assert result["status"] == "ok"
 
     def test_pro_list_toolboxes_error(self) -> None:
-        result = server.pro_list_toolboxes()
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_list_toolboxes()
+        assert result["status"] == "error"
 
     def test_pro_list_toolboxes_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4463,12 +4799,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_describe_tool_ok(self) -> None:
-        result = server.pro_describe_tool(tool_name="Buffer_analysis")
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_describe_tool(tool_name="Buffer_analysis")
+        assert result["status"] == "ok"
 
     def test_pro_describe_tool_error(self) -> None:
-        result = server.pro_describe_tool(tool_name="Buffer_analysis")
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_describe_tool(tool_name="Buffer_analysis")
+        assert result["status"] == "error"
 
     def test_pro_describe_tool_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4485,12 +4824,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_get_geoprocessing_history_ok(self) -> None:
-        result = server.pro_get_geoprocessing_history()
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_get_geoprocessing_history()
+        assert result["status"] == "ok"
 
     def test_pro_get_geoprocessing_history_error(self) -> None:
-        result = server.pro_get_geoprocessing_history(count=5)
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_geoprocessing_history(count=5)
+        assert result["status"] == "error"
 
     def test_pro_get_geoprocessing_history_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4507,14 +4849,16 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_run_python_script_ok(self) -> None:
-        code = "import arcpy; print(arcpy.GetInstallInfo()['Version'])"
-        result = server.pro_run_python_script(code=code)
-        assert isinstance(result, dict)
+        code = "print('hello')"
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_run_python_script(code=code)
+        assert result["status"] == "ok"
 
     def test_pro_run_python_script_error(self) -> None:
-        code = "import arcpy; print(arcpy.GetInstallInfo()['Version'])"
-        result = server.pro_run_python_script(code=code, timeout_seconds=30)
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_run_python_script(code="print('hello')")
+        assert result["status"] == "error"
 
     def test_pro_run_python_script_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4531,12 +4875,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_set_environment_ok(self) -> None:
-        result = server.pro_set_environment(key="workspace", value=r"C:\data\test.gdb")
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_set_environment(key="workspace", value=r"C:\data\test.gdb")
+        assert result["status"] == "ok"
 
     def test_pro_set_environment_error(self) -> None:
-        result = server.pro_set_environment(key="cellSize", value="30")
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_environment(key="cellSize", value="30")
+        assert result["status"] == "error"
 
     def test_pro_set_environment_forwards_op_and_args(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4553,12 +4900,15 @@ class ProToolsTests(unittest.TestCase):
         assert result["status"] == "unavailable"
 
     def test_pro_get_environment_ok(self) -> None:
-        result = server.pro_get_environment(key="workspace")
-        assert isinstance(result, dict)
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_get_environment(key="workspace")
+        assert result["status"] == "ok"
 
     def test_pro_get_environment_error(self) -> None:
-        result = server.pro_get_environment(key="cellSize")
-        assert isinstance(result, dict)
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_get_environment(key="cellSize")
+        assert result["status"] == "error"
 
     def test_pro_get_environment_forwards_op_and_args_key(self) -> None:
         with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
@@ -4575,6 +4925,511 @@ class ProToolsTests(unittest.TestCase):
             "pro.getEnvironment",
             {},
         )
+
+
+    # --- pro_reorder_layer ---
+
+    def test_pro_reorder_layer_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_reorder_layer(layer="Parcels", index=2)
+        assert result["status"] == "unavailable"
+
+    def test_pro_reorder_layer_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_reorder_layer(layer="Roads", index=0)
+        assert result["status"] == "ok"
+
+    def test_pro_reorder_layer_error(self) -> None:
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_reorder_layer(layer="Zones", index=3)
+        assert result["status"] == "error"
+
+    def test_pro_reorder_layer_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_reorder_layer(layer="Buildings", index=1)
+        mock_call.assert_called_once_with(
+            "pro.reorderLayer",
+            {"layer": "Buildings", "index": "1"},
+        )
+
+    # --- pro_set_labels_enabled ---
+
+    def test_pro_set_labels_enabled_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_labels_enabled(layer="Parcels", enabled=True)
+        assert result["status"] == "unavailable"
+
+    def test_pro_set_labels_enabled_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_set_labels_enabled(layer="Roads", enabled=False)
+        assert result["status"] == "ok"
+
+    def test_pro_set_labels_enabled_error(self) -> None:
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_set_labels_enabled(layer="Zones", enabled=True)
+        assert result["status"] == "error"
+
+    def test_pro_set_labels_enabled_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_set_labels_enabled(layer="Buildings", enabled=True)
+        mock_call.assert_called_once_with(
+            "pro.setLabelsEnabled",
+            {"layer": "Buildings", "enabled": "True"},
+        )
+
+    # --- pro_open_dockpane ---
+
+    def test_pro_open_dockpane_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_open_dockpane(dockpane_id="Geoprocessing")
+        assert result["status"] == "unavailable"
+
+    def test_pro_open_dockpane_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_open_dockpane(dockpane_id="Catalog")
+        assert result["status"] == "ok"
+
+    def test_pro_open_dockpane_error(self) -> None:
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_open_dockpane(dockpane_id="Unknown")
+        assert result["status"] == "error"
+
+    def test_pro_open_dockpane_forwards_op_and_args(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_open_dockpane(dockpane_id="Contents")
+        mock_call.assert_called_once_with(
+            "pro.openDockpane",
+            {"dockpaneId": "Contents"},
+        )
+
+    # --- pro_export_layout_to_file ---
+
+    def test_pro_export_layout_to_file_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_layout_to_file(
+                layout_name="Layout1", output_path=r"C:\output.pdf"
+            )
+        assert result["status"] == "unavailable"
+
+    def test_pro_export_layout_to_file_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_export_layout_to_file(
+                layout_name="Layout1", output_path=r"C:\output.png", format="PNG", dpi=300
+            )
+        assert result["status"] == "ok"
+
+    def test_pro_export_layout_to_file_error(self) -> None:
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_export_layout_to_file(
+                layout_name="Layout1", output_path=r"C:\output.pdf"
+            )
+        assert result["status"] == "error"
+
+    def test_pro_export_layout_to_file_forwards_op_and_args_required(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_export_layout_to_file(
+                layout_name="MyLayout", output_path=r"D:\maps\result.pdf"
+            )
+        mock_call.assert_called_once_with(
+            "pro.exportLayoutToFile",
+            {"layoutName": "MyLayout", "outputPath": r"D:\maps\result.pdf"},
+        )
+
+    def test_pro_export_layout_to_file_forwards_op_and_args_all(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_export_layout_to_file(
+                layout_name="MyLayout",
+                output_path=r"D:\maps\result.png",
+                format="PNG",
+                dpi=300,
+            )
+        mock_call.assert_called_once_with(
+            "pro.exportLayoutToFile",
+            {
+                "layoutName": "MyLayout",
+                "outputPath": r"D:\maps\result.png",
+                "format": "PNG",
+                "dpi": "300",
+            },
+        )
+
+    # --- pro_fly_to_location ---
+
+    def test_pro_fly_to_location_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_fly_to_location(x=100.0, y=200.0, z=500.0)
+        assert result["status"] == "unavailable"
+
+    def test_pro_fly_to_location_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"status": "ok", "data": {}}):
+            result = server.pro_fly_to_location(
+                x=100.0, y=200.0, z=500.0, heading=45.0, pitch=30.0, duration_seconds=2.5
+            )
+        assert result["status"] == "ok"
+
+    def test_pro_fly_to_location_error(self) -> None:
+        err = named_pipe.AddInOperationError("Test error")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_fly_to_location(x=100.0, y=200.0, z=500.0)
+        assert result["status"] == "error"
+
+    def test_pro_fly_to_location_forwards_op_and_args_required(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_fly_to_location(x=1.5, y=2.5, z=100.0)
+        mock_call.assert_called_once_with(
+            "pro.flyToLocation",
+            {"x": "1.5", "y": "2.5", "z": "100.0"},
+        )
+
+    def test_pro_fly_to_location_forwards_op_and_args_all(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={}) as mock_call:
+            server.pro_fly_to_location(
+                x=1.5, y=2.5, z=100.0, heading=90.0, pitch=45.0, duration_seconds=3.0
+            )
+        mock_call.assert_called_once_with(
+            "pro.flyToLocation",
+            {
+                "x": "1.5",
+                "y": "2.5",
+                "z": "100.0",
+                "heading": "90.0",
+                "pitch": "45.0",
+                "durationSeconds": "3.0",
+            },
+        )
+
+    # --- pro_ping_python_runtime ---
+
+    def test_pro_ping_python_runtime_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_ping_python_runtime()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_ping_python_runtime_ok(self) -> None:
+        with patch(
+            "arcgis_mcp_server.call_addin",
+            return_value={"python_version": "3.13.7", "arcpy_version": "3.6.3"},
+        ):
+            result = server.pro_ping_python_runtime()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["data"]["python_version"], "3.13.7")
+
+    def test_pro_ping_python_runtime_error(self) -> None:
+        err = named_pipe.AddInOperationError("bad op")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_ping_python_runtime()
+        self.assertEqual(result["status"], "error")
+
+    def test_pro_ping_python_runtime_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_ping_python_runtime()
+        mock_call.assert_called_once_with("pro.pingPythonRuntime", {})
+
+    # --- pro_plugin_batch_export ---
+
+    def test_pro_plugin_batch_export_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_plugin_batch_export("csv", "C:/out")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_plugin_batch_export_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"done": True}):
+            result = server.pro_plugin_batch_export("geojson", "C:/out")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_plugin_batch_export_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_plugin_batch_export("kml", "C:/out")
+        mock_call.assert_called_once_with("pro.plugin.batchExport", {"targetFormat": "kml", "outputDir": "C:/out"})
+
+    # --- pro_plugin_coordinate_capture ---
+
+    def test_pro_plugin_coordinate_capture_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_plugin_coordinate_capture()
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_plugin_coordinate_capture_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"centerX": 100.0, "centerY": 200.0}):
+            result = server.pro_plugin_coordinate_capture(target_wkid=4326)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["data"]["centerX"], 100.0)
+
+    def test_pro_plugin_coordinate_capture_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_plugin_coordinate_capture()
+        mock_call.assert_called_once_with("pro.plugin.coordinateCapture", {})
+
+    def test_pro_plugin_coordinate_capture_with_wkid(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_plugin_coordinate_capture(target_wkid=28356)
+        mock_call.assert_called_once_with("pro.plugin.coordinateCapture", {"targetWkid": "28356"})
+
+    # --- pro_plugin_feature_inspector ---
+
+    def test_pro_plugin_feature_inspector_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_plugin_feature_inspector("Parcels", 42)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_plugin_feature_inspector_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"oid": 42, "geometryType": "Polygon"}):
+            result = server.pro_plugin_feature_inspector("Parcels", 42)
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_plugin_feature_inspector_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_plugin_feature_inspector("Roads", 7)
+        mock_call.assert_called_once_with("pro.plugin.featureInspector", {"layer": "Roads", "oid": "7"})
+
+    # --- pro_plugin_query_builder ---
+
+    def test_pro_plugin_query_builder_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_plugin_query_builder("Parcels", "ZONE", "Residential")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_plugin_query_builder_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"matchCount": 15}):
+            result = server.pro_plugin_query_builder("Parcels", "ZONE", "Residential", operator_name="contains")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_plugin_query_builder_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            server.pro_plugin_query_builder("Buildings", "HEIGHT", "10", operator_name="gt")
+        mock_call.assert_called_once_with("pro.plugin.queryBuilder", {"layer": "Buildings", "field": "HEIGHT", "value": "10", "operator": "gt"})
+
+    # --- pro_plugin_field_calculator ---
+
+    def test_pro_plugin_field_calculator_unavailable(self) -> None:
+        err = named_pipe.AddInNotAvailableError("Not found")
+        with patch("arcgis_mcp_server.call_addin", side_effect=err):
+            result = server.pro_plugin_field_calculator("Parcels", "AreaHa", "!Shape_Area! / 10000")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_pro_plugin_field_calculator_ok(self) -> None:
+        with patch("arcgis_mcp_server.call_addin", return_value={"rowCount": 250}):
+            result = server.pro_plugin_field_calculator("Parcels", "AreaHa", "!Shape_Area! / 10000")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["data"]["rowCount"], 250)
+
+    def test_pro_plugin_field_calculator_forwards_correct_op(self) -> None:
+        with patch("arcgis_mcp_server.call_addin") as mock_call:
+            expr = "!Population! / !Area!"
+            server.pro_plugin_field_calculator("Blocks", "Density", expr)
+        mock_call.assert_called_once_with("pro.plugin.fieldCalculator", {"layer": "Blocks", "field": "Density", "expression": expr})
+
+    # --- arcgis_name_resolver ---
+
+    def test_resolve_layer_name_exact_match(self) -> None:
+        from arcgis_name_resolver import resolve_layer_name
+
+        result = resolve_layer_name("Parcels", ["Parcels", "Roads", "Hydrology"])
+        self.assertEqual(result, "Parcels")
+
+    def test_resolve_layer_name_case_insensitive(self) -> None:
+        from arcgis_name_resolver import resolve_layer_name
+
+        result = resolve_layer_name("parcels", ["Parcels", "Roads"])
+        self.assertEqual(result, "Parcels")
+
+    def test_resolve_layer_name_fuzzy_match(self) -> None:
+        from arcgis_name_resolver import resolve_layer_name
+
+        result = resolve_layer_name("parcel", ["Parcels_2024", "Roads", "Hydrology"])
+        self.assertEqual(result, "Parcels_2024")
+
+    def test_resolve_layer_name_no_match(self) -> None:
+        from arcgis_name_resolver import resolve_layer_name
+
+        result = resolve_layer_name("buildings", ["Parcels", "Roads"])
+        self.assertIsNone(result)
+
+    def test_resolve_field_name_exact(self) -> None:
+        from arcgis_name_resolver import resolve_field_name
+
+        result = resolve_field_name("ZONE", ["OBJECTID", "ZONE", "AREA"])
+        self.assertEqual(result, "ZONE")
+
+    def test_resolve_field_name_fuzzy(self) -> None:
+        from arcgis_name_resolver import resolve_field_name
+
+        result = resolve_field_name("zone_code", ["ZONE_CODE_2024", "AREA", "SHAPE"])
+        self.assertEqual(result, "ZONE_CODE_2024")
+
+    def test_resolve_with_details_exact(self) -> None:
+        from arcgis_name_resolver import resolve_layer_with_details
+        layers = [{"Name": "Parcels_2024"}, {"Name": "Roads"}]
+        with patch("arcgis_name_resolver.call_addin", return_value=layers):
+            result = resolve_layer_with_details("Parcels_2024")
+        self.assertEqual(result["resolved_name"], "Parcels_2024")
+        self.assertEqual(result["confidence"], 1.0)
+
+    def test_resolve_with_details_fuzzy(self) -> None:
+        from arcgis_name_resolver import resolve_layer_with_details
+        layers = [{"Name": "Parcels_2024"}, {"Name": "Roads"}]
+        with patch("arcgis_name_resolver.call_addin", return_value=layers):
+            result = resolve_layer_with_details("parcels")
+        self.assertEqual(result["resolved_name"], "Parcels_2024")
+
+    def test_resolve_with_details_no_match(self) -> None:
+        from arcgis_name_resolver import resolve_layer_with_details
+        layers = [{"Name": "Parcels_2024"}, {"Name": "Roads"}]
+        with patch("arcgis_name_resolver.call_addin", return_value=layers):
+            result = resolve_layer_with_details("buildings")
+        self.assertIsNone(result["resolved_name"])
+        self.assertIn("candidates", result)
+
+    def test_resolve_with_details_empty_map(self) -> None:
+        from arcgis_name_resolver import resolve_layer_with_details
+        with patch("arcgis_name_resolver.call_addin", return_value=[]):
+            result = resolve_layer_with_details("anything")
+        self.assertIsNone(result["resolved_name"])
+
+    def test_resolve_with_details_unavailable(self) -> None:
+        from arcgis_name_resolver import resolve_layer_with_details, AddInNotAvailableError
+        with patch("arcgis_name_resolver.call_addin", side_effect=AddInNotAvailableError("No Add-In")):
+            result = resolve_layer_with_details("anything")
+        self.assertIsNone(result["resolved_name"])
+        self.assertIn("error", result)
+
+    def test_pro_resolve_layer_tool(self) -> None:
+        from arcgis_name_resolver import resolve_layer_with_details
+        layers = [{"Name": "Parcels_2024"}, {"Name": "Roads_Main"}]
+        with patch("arcgis_name_resolver.call_addin", return_value=layers):
+            result = server.pro_resolve_layer("parcels")
+        self.assertEqual(result.get("resolved_name"), "Parcels_2024")
+
+    # --- arcgis_workflows ---
+
+    def test_execute_macro_all_steps_succeed(self) -> None:
+        from arcgis_workflows import execute_macro
+
+        macro = {
+            "name": "test",
+            "steps": [
+                {"op": "pro.getActiveMapName", "args": {}, "name": "get_map"},
+                {"op": "pro.listLayers", "args": {}, "name": "list_layers"},
+            ],
+        }
+        with patch("arcgis_workflows.call_addin", return_value={"done": True}):
+            result = execute_macro(macro)
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["all_succeeded"])
+        self.assertEqual(result["completed"], 2)
+
+    def test_execute_macro_step_fails_stops(self) -> None:
+        from arcgis_workflows import execute_macro
+        from arcgis_mcp_named_pipe import AddInOperationError
+
+        macro = {
+            "name": "failing",
+            "steps": [
+                {"op": "pro.getActiveMapName", "args": {}},
+                {"op": "pro.badOp", "args": {}},
+                {"op": "pro.listLayers", "args": {}},
+            ],
+        }
+        side_effects = [
+            {"name": "Map"},
+            AddInOperationError("bad op"),
+        ]
+        with patch("arcgis_workflows.call_addin", side_effect=side_effects):
+            result = execute_macro(macro)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["completed"], 2)
+        self.assertFalse(result["all_succeeded"])
+        self.assertEqual(result["results"][1]["status"], "error")
+
+    def test_execute_macro_addin_unavailable(self) -> None:
+        from arcgis_workflows import execute_macro
+        from arcgis_mcp_named_pipe import AddInNotAvailableError
+
+        macro = {
+            "name": "unavailable",
+            "steps": [
+                {"op": "pro.ping", "args": {}},
+            ],
+        }
+        with patch("arcgis_workflows.call_addin", side_effect=AddInNotAvailableError("No pipe")):
+            result = execute_macro(macro)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["results"][0]["status"], "unavailable")
+
+    def test_execute_macro_no_steps(self) -> None:
+        from arcgis_workflows import execute_macro
+
+        result = execute_macro({"name": "empty", "steps": []})
+        self.assertEqual(result["status"], "error")
+        self.assertIn("no steps", result.get("message", "").lower())
+
+    def test_list_builtin_macros(self) -> None:
+        from arcgis_workflows import list_builtin_macros
+
+        macros = list_builtin_macros()
+        self.assertGreaterEqual(len(macros), 4)
+        names = [m["name"] for m in macros]
+        self.assertIn("Select and Zoom", names)
+        self.assertIn("Export All Layers", names)
+        self.assertIn("Inspect Feature", names)
+        self.assertIn("Capture and Project", names)
+
+    def test_load_macro_by_name(self) -> None:
+        from arcgis_workflows import load_macro
+
+        macro = load_macro("Select and Zoom")
+        self.assertIsNotNone(macro)
+        self.assertEqual(macro["name"], "Select and Zoom")
+        self.assertIn("steps", macro)
+
+    def test_load_macro_by_stem(self) -> None:
+        from arcgis_workflows import load_macro
+
+        macro = load_macro("select_and_zoom")
+        self.assertIsNotNone(macro)
+        self.assertIn("steps", macro)
+
+    def test_load_macro_not_found(self) -> None:
+        from arcgis_workflows import load_macro
+
+        result = load_macro("nonexistent_macro_xyz")
+        self.assertIsNone(result)
+
+    def test_pro_run_macro_with_inline_json(self) -> None:
+        macro_json = '{"name":"inline","steps":[{"op":"pro.ping","args":{}}]}'
+        with patch("arcgis_workflows.call_addin", return_value={"pong": "addin"}):
+            result = server.pro_run_macro(macro_json)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["completed"], 1)
+
+    def test_pro_run_macro_with_builtin_name(self) -> None:
+        with patch("arcgis_workflows.call_addin", return_value={"done": True}):
+            result = server.pro_run_macro("Select and Zoom")
+        self.assertEqual(result["status"], "ok")
+
+    def test_pro_run_macro_not_found(self) -> None:
+        result = server.pro_run_macro("nonexistent_macro_xyz")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("not found", result.get("message", ""))
+
+    def test_pro_list_macros(self) -> None:
+        result = server.pro_list_macros()
+        self.assertEqual(result["status"], "ok")
+        self.assertGreaterEqual(result["macro_count"], 4)
 
 
 if __name__ == "__main__":

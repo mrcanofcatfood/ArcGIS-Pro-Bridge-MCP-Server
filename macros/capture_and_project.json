@@ -1,0 +1,13 @@
+{
+  "name": "Capture and Project",
+  "description": "Capture the current map center and reproject to a target CRS.",
+  "steps": [
+    {
+      "name": "capture_coordinates",
+      "op": "pro.plugin.coordinateCapture",
+      "args": {
+        "targetWkid": "{{target_wkid}}"
+      }
+    }
+  ]
+}

@@ -18,28 +18,36 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Build Add-In
-        working-directory: addin/APBridgeAddIn
-        run: dotnet build APBridgeAddIn.csproj --configuration Release --nologo -v:q 2>&1 | Select-String -Pattern "error|Build succeeded"
+      - name: Check ArcGIS SDK availability
+        id: check_sdk
         shell: pwsh
-
-      - name: Package Add-In
-        working-directory: addin/APBridgeAddIn
         run: |
-          $projDir = "$PWD"
-          $outDir = "$projDir\bin\Release\net8.0-windows8.0"
-          $tempDir = "$projDir\obj\esri_package"
-          $esriAddinX = "$outDir\APBridgeAddIn.esriAddinX"
+          $sdkPaths = @(
+            "C:\Program Files\ArcGIS\Pro\bin\ArcGIS.Core.Host.dll",
+            "C:\Program Files\ArcGIS\Pro\bin\ArcGIS.Desktop.Framework.dll"
+          )
+          $available = $true
+          foreach ($p in $sdkPaths) {
+            if (-not (Test-Path $p)) { $available = $false; break }
+          }
+          echo "sdk_available=$available" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-          if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }
-          New-Item -ItemType Directory -Path "$tempDir\Install" -Force | Out-Null
-          Copy-Item "$projDir\Config.daml" "$tempDir\Config.daml"
-          Copy-Item "$outDir\APBridgeAddIn.dll" "$tempDir\Install\APBridgeAddIn.dll"
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $esriAddinX)
-          Remove-Item -Recurse -Force $tempDir
-          Write-Output "Packaged: $esriAddinX"
+      - name: Build Add-In
+        if: steps.check_sdk.outputs.sdk_available == 'true'
+        working-directory: addin/APBridgeAddIn
+        run: dotnet build APBridgeAddIn.csproj --nologo -v:q 2>&1 | Select-String -Pattern "error|Build succeeded|Build FAILED"
         shell: pwsh
+
+      - name: Package Add-In (via package-addin.ps1)
+        if: steps.check_sdk.outputs.sdk_available == 'true'
+        working-directory: addin/APBridgeAddIn
+        run: ./package-addin.ps1 -Action package
+        shell: pwsh
+
+      - name: Skip Add-In build
+        if: steps.check_sdk.outputs.sdk_available != 'true'
+        shell: pwsh
+        run: echo "::warning::ArcGIS Pro SDK not available on this runner. Skipping Add-In build."
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -47,7 +55,7 @@ jobs:
           name: ${{ github.ref_name }}
           body_path: CHANGELOG.md
           files: |
-            addin/APBridgeAddIn/bin/Release/net8.0-windows8.0/APBridgeAddIn.esriAddinX
+            addin/APBridgeAddIn/bin/Debug/net8.0-windows8.0/APBridgeAddIn.esriAddinX
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
