@@ -13,7 +13,7 @@ The server has two modes. Choose based on whether the C# Add-In is available:
 | Mode | Tools | When to Use | Requires |
 |------|-------|-------------|----------|
 | **File-Based** | 21 file-based tools total | Batch geoprocessing, automated scripts, when Pro is closed or you only need disk access | Nothing extra |
-| **Real-Time (Add-In)** | `pro_ping`, `pro_list_layers`, `pro_select_by_attribute`, `pro_create_point_feature`, etc. (138 tools) | Live map interaction, editing, selection, navigation, dynamic visualization | APBridgeAddIn installed + Pro running + Named Pipe connected |
+| **Real-Time (Add-In)** | `pro_ping`, `pro_list_layers`, `pro_select_by_attribute`, `pro_create_point_feature`, etc. (144 tools) | Live map interaction, editing, selection, navigation, dynamic visualization | APBridgeAddIn installed + Pro running + Named Pipe connected |
 
 Check viability: `pro_ping` returns `"status": "ok"` if Add-In is available, `"status": "unavailable"` otherwise.
 
@@ -52,7 +52,7 @@ inspect_gdb(gdb_path="path/to/data.gdb")
 
 ### 4. (Optional) Real-Time ArcGIS Pro Interaction
 
-If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to interact with the live session. 138 tools are available across 14+ categories:
+If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to interact with the live session. 144 tools are available across 14+ categories:
 
 **Map & Selection (Base)**
 - `pro_ping`, `pro_get_active_map_name`, `pro_list_layers`
@@ -112,7 +112,7 @@ If the **APBridgeAddIn** is installed in ArcGIS Pro, use `pro.*` tools to intera
 | `clip_features` | Clip GP tool | `input_features`, `clip_features`, `output_path` |
 | `execute_arcpy_code` | Run arbitrary ArcPy | `code`, `timeout_seconds` |
 
-**138 `pro.*` Add-In tools across 18 categories** — see the `README.md` for the full table. Quick reference by category:
+**144 `pro.*` Add-In tools across 18 categories** — see the `README.md` for the full table. Quick reference by category:
 
 | Category | Phase | Example Tools |
 |----------|-------|---------------|
@@ -187,8 +187,24 @@ Run named multi-step sequences with `pro_run_macro`. Built-in macros in `macros/
 | `Export All Layers` | Batch export all layers to CSV |
 | `Inspect Feature` | Select by OID → Zoom → Inspect attributes |
 | `Capture and Project` | Capture map center → Reproject |
+| `Buffer and Export` | Buffer features → Export to shapefile |
+| `Field Statistics Report` | Get field stats → Export to CSV |
+| `Create Point from Address` | Search address → Pan → Create point |
+| `Select and Inspect` | Select by attribute → Zoom → Inspect first |
+| `Split by Attribute` | Select by attribute → Split with cut geometry |
 
 You can also pass inline JSON or a file path to `pro_run_macro`.
+
+Use `variables` param to fill `{{key}}` placeholders in macro steps:
+```
+pro_run_macro("Select and Zoom", variables='{"layer": "Parcels", "where": "ZONE = \'Residential\'"}')
+```
+
+## Python Micro-Plugins
+
+Lightweight Python-only plugins in `microplugins/`. Each `.py` exposes `register(registry)` and a `run(args)` function. No C# compilation needed.
+
+Use `pro_micro_list()` to list, `pro_micro_run("name", '{"key": "val"}')` to execute.
 
 ## Limitations
 

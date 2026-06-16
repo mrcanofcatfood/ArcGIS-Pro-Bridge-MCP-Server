@@ -1,0 +1,22 @@
+{
+  "name": "Field Statistics Report",
+  "description": "Compute min, max, mean, stddev for a numeric field and export to CSV.",
+  "steps": [
+    {
+      "name": "get_statistics",
+      "op": "pro.getLayerStatistics",
+      "args": {
+        "layer": "{{layer}}",
+        "field": "{{field}}"
+      }
+    },
+    {
+      "name": "export_to_csv",
+      "op": "pro.exportToCsv",
+      "args": {
+        "layer": "{{layer}}",
+        "output_path": "{{csv_path}}"
+      }
+    }
+  ]
+}

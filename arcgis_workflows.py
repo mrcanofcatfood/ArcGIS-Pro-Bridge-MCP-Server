@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,29 @@ def list_builtin_macros() -> list[dict[str, Any]]:
         except Exception:
             pass
     return macros
+
+
+def _substitute(template: str, variables: dict[str, str]) -> str:
+    """Replace {{key}} placeholders with values from variables dict."""
+    def _replace(m: re.Match) -> str:
+        key = m.group(1).strip()
+        return variables.get(key, m.group(0))
+    return re.sub(r"\{\{(\w+)\}\}", _replace, template)
+
+
+def _substitute_step(step: dict[str, Any], variables: dict[str, str]) -> dict[str, Any]:
+    """Apply variable substitution to all string values in a step dict."""
+    subbed: dict[str, Any] = {}
+    for k, v in step.items():
+        if isinstance(v, str):
+            subbed[k] = _substitute(v, variables)
+        elif isinstance(v, dict):
+            subbed[k] = _substitute_step(v, variables)
+        elif isinstance(v, list):
+            subbed[k] = [_substitute_step(i, variables) if isinstance(i, dict) else i for i in v]
+        else:
+            subbed[k] = v
+    return subbed
 
 
 def load_macro(name_or_path: str) -> dict[str, Any] | None:
@@ -58,14 +82,17 @@ def load_macro(name_or_path: str) -> dict[str, Any] | None:
 def execute_macro(
     macro_def: dict[str, Any],
     timeout_per_step: float = 10.0,
+    variables: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Execute a workflow macro - a named sequence of pro.* operations.
 
     Each step is executed sequentially via call_addin().
+    {{key}} placeholders in step args are replaced with values from variables dict.
     If a step fails, remaining steps are skipped.
     """
     name = macro_def.get("name", "unnamed")
     steps = macro_def.get("steps", [])
+    vars_dict = variables or {}
 
     if not steps:
         return {
@@ -81,6 +108,7 @@ def execute_macro(
     all_succeeded = True
 
     for i, step in enumerate(steps):
+        step = _substitute_step(step, vars_dict)
         step_op = step.get("op", "")
         step_args = step.get("args", {})
         step_name = step.get("name", f"step_{i+1}")

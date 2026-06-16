@@ -1,0 +1,27 @@
+{
+  "name": "Select and Inspect",
+  "description": "Select features by attribute, zoom to selection, and inspect the first feature.",
+  "steps": [
+    {
+      "name": "select_by_attribute",
+      "op": "pro.selectByAttribute",
+      "args": {
+        "layer": "{{layer}}",
+        "where": "{{where}}"
+      }
+    },
+    {
+      "name": "zoom_to_selected",
+      "op": "pro.zoomToSelected",
+      "args": {}
+    },
+    {
+      "name": "inspect_first",
+      "op": "pro.getFeatureByOid",
+      "args": {
+        "layer": "{{layer}}",
+        "oid": "{{oid}}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "Buffer and Export",
+  "description": "Buffer features and export the result to shapefile.",
+  "steps": [
+    {
+      "name": "buffer_features",
+      "op": "pro.runGpTool",
+      "args": {
+        "tool_name": "Buffer",
+        "parameters": ["{{layer}}", "{{output_fc}}", "{{distance}}"]
+      }
+    },
+    {
+      "name": "export_to_shapefile",
+      "op": "pro.copyFeatures",
+      "args": {
+        "layer": "{{output_fc}}",
+        "output_path": "{{shapefile_path}}"
+      }
+    }
+  ]
+}

@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.6.0 - 2026-06-16
+
+### Added — 4 Major Features
+
+#### Feature 7: Python Micro-Plugins
+- `microplugins/` directory — lightweight Python-only plugins, no C# compilation
+- `arcgis_micro_plugins.py` engine — auto-discovers `.py` files via `importlib`, calls `register(registry)` and `run(args)`
+- `pro_micro_list()` and `pro_micro_run(plugin, args)` MCP tools
+- 2 example micro-plugins: `hello` (greeting) and `echo` (echo args)
+- 8 micro-plugin tests (all passing)
+
+#### Feature 8: Workflow Macro Template Variables
+- `{{key}}` placeholder substitution in macro step args via new `variables` param on `pro_run_macro`
+- `_substitute()` and `_substitute_step()` functions in `arcgis_workflows.py`
+- Example: `pro_run_macro("Select and Zoom", variables='{"layer": "Parcels", "where": "ZONE = \'Residential\'"}')`
+- 8 template variable tests (all passing)
+
+#### 5 More Built-in Workflow Macros
+| Macro | Steps |
+|-------|-------|
+| `Buffer and Export` | Buffer → Export shapefile |
+| `Field Statistics Report` | Get stats → Export CSV |
+| `Create Point from Address` | Search → Pan → Create point |
+| `Select and Inspect` | Select → Zoom → Inspect first |
+| `Split by Attribute` | Select → Split with geometry |
+
+- 9 built-in macros total (4 old + 5 new), all in `macros/` with `{{var}}` placeholders
+
+#### Safety Net / Snapshot Tools Added to Docs
+- 4 snapshot tools (`pro_create_snapshot`, `pro_restore_snapshot`, `pro_list_snapshots`, `pro_delete_snapshot`) added to `scripts/generate_api_docs.py` categories
+- `API_REFERENCE.md` regenerated (22 categories, 144 tools)
+- `README.md` and `AGENTS.md` counts updated (138 → 144)
+
+### Fixed
+- `pro_run_macro` now returns clear error for invalid `variables` JSON (was proceeding with corrupted data)
+- `_substitute()` preserves unknown `{{keys}}` unchanged rather than silently dropping them
+
+### Tests
+- 666 total Python tests (all passing, ~96s)
+- 14 C# tests (all passing)
+- 8 new micro-plugin tests
+- 8 new template variable substitution tests
+- Macro count assertions updated 4 → 9
+
 ## 0.5.3 - 2026-06-13
 
 ### Added — 4 Major Features

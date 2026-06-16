@@ -1,11 +1,11 @@
 # ArcGIS Pro Bridge MCP Server
 
-Connect AI agents (OpenCode, Claude, Cursor) to ArcGIS Pro for AI-assisted GIS workflows — with **138 real-time tools** and **21 file-based geoprocessing tools**.
+Connect AI agents (OpenCode, Claude, Cursor) to ArcGIS Pro for AI-assisted GIS workflows — with **144 real-time tools** and **21 file-based geoprocessing tools**.
 
 ## Features
 
 - **Two modes, one server** — file-based tools (no Add-In needed) + real-time Add-In tools (live Pro session)
-- **138 `pro.*` tools** — map navigation, feature editing, schema management, 3D scenes, layouts, geoprocessing, data exchange, plugins, workflow macros, and more
+- **144 `pro.*` tools** — map navigation, feature editing, schema management, 3D scenes, layouts, geoprocessing, data exchange, plugins, workflow macros, edit safety net, Python micro-plugins, and more
 - **Plugin system** — write custom C# handlers without modifying core code
 - **Workflow macros** — run named multi-step sequences (`pro_run_macro`)
 - **Natural language resolution** — fuzzy layer/field name matching (`pro_resolve_layer`)
@@ -22,7 +22,7 @@ Connect AI agents (OpenCode, Claude, Cursor) to ArcGIS Pro for AI-assisted GIS w
     ┌──────────▼──────────┐    ┌──────────▼──────────┐
      │  File-Based Tools    │    │  Real-Time Add-In    │
      │  (arcpy subprocess)  │    │  (Named Pipe IPC)    │
-     │  21 tools            │    │  138 `pro.*` tools   │
+     │  21 tools            │    │  144 `pro.*` tools   │
      │  No Add-In needed    │    │  Requires Add-In     │
     └──────────────────────┘    └──────────┬──────────┘
                                            │
@@ -36,7 +36,7 @@ Connect AI agents (OpenCode, Claude, Cursor) to ArcGIS Pro for AI-assisted GIS w
 | Mode | Tools | When to Use | Requires |
 |------|-------|-------------|----------|
 | **File-Based** | 21 tools (`inspect_project_context`, `buffer_features`, `execute_arcpy_code`, etc.) | Heavy geoprocessing, batch ops, automated CI/CD, Pro closed or under load | Nothing extra |
-| **Real-Time (Add-In)** | 138 `pro.*` tools (map, edit, schema, 3D, layout, GP, plugins, macros) | Interactive selection, live map inspection, feature editing, navigation | Add-In install + Pro running + Named Pipe |
+| **Real-Time (Add-In)** | 144 `pro.*` tools (map, edit, schema, 3D, layout, GP, plugins, macros) | Interactive selection, live map inspection, feature editing, navigation | Add-In install + Pro running + Named Pipe |
 
 ## Quickstart
 
@@ -210,7 +210,7 @@ See [examples/claude-desktop-mcp-config.json](examples/claude-desktop-mcp-config
 | File | Contents |
 |------|----------|
 | [AGENTS.md](AGENTS.md) | Agent instructions and workflow guide |
-| [API_REFERENCE.md](API_REFERENCE.md) | Full 138-tool API reference |
+| [API_REFERENCE.md](API_REFERENCE.md) | Full 144-tool API reference |
 | [LIMITATIONS.md](LIMITATIONS.md) | Known limitations and blocked APIs |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [docs/plugin-handler-system.md](docs/plugin-handler-system.md) | Plugin development guide |

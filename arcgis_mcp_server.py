@@ -26,6 +26,10 @@ from arcgis_name_resolver import (
     resolve_layer_name,
     resolve_layer_with_details,
 )
+from arcgis_micro_plugins import (
+    list_micro_plugins,
+    run_micro_plugin,
+)
 from arcgis_workflows import (
     execute_macro,
     list_builtin_macros,
@@ -1512,7 +1516,26 @@ def pro_plugin_field_calculator(layer: str, field: str, expression: str) -> dict
 
 
 @mcp.tool()
-def pro_run_macro(macro: str, timeout_per_step: float = 10.0) -> dict[str, Any]:
+def pro_micro_list() -> dict[str, Any]:
+    """List all available Python micro-plugins from the microplugins/ directory."""
+    plugins = list_micro_plugins()
+    return {"status": "ok", "plugin_count": len(plugins), "plugins": plugins}
+
+
+@mcp.tool()
+def pro_micro_run(plugin: str, args: str = "{}") -> dict[str, Any]:
+    """Execute a Python micro-plugin by name with JSON args. Micro-plugins are lightweight Python scripts in microplugins/."""
+    try:
+        parsed_args = json.loads(args)
+    except json.JSONDecodeError:
+        return {"status": "error", "message": "args must be valid JSON."}
+    if not isinstance(parsed_args, dict):
+        return {"status": "error", "message": "args must be a JSON object."}
+    return run_micro_plugin(plugin, parsed_args)
+
+
+@mcp.tool()
+def pro_run_macro(macro: str, timeout_per_step: float = 10.0, variables: str | None = None) -> dict[str, Any]:
     """Execute a workflow macro - a named sequence of pro.* operations.
 
     The macro can be:
@@ -1520,8 +1543,19 @@ def pro_run_macro(macro: str, timeout_per_step: float = 10.0) -> dict[str, Any]:
     2. A file path to a JSON macro file
     3. An inline JSON macro definition
 
+    {{key}} placeholders in step args are replaced with values from variables JSON dict.
+    Example: '{"layer": "Parcels", "where": "ZONE = 'Residential'"}
+
     Returns per-step results including status, error messages, and data.
     If any step fails, remaining steps are skipped."""
+    # Parse variables JSON if provided
+    vars_dict = None
+    if variables:
+        try:
+            vars_dict = json.loads(variables)
+        except json.JSONDecodeError:
+            return {"status": "error", "message": "variables must be a valid JSON object."}
+
     # Try loading by name or path
     macro_def = load_macro(macro)
 
@@ -1532,7 +1566,7 @@ def pro_run_macro(macro: str, timeout_per_step: float = 10.0) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {"status": "error", "message": f"Macro not found: '{macro}'. Use a built-in name, file path, or inline JSON."}
 
-    return execute_macro(macro_def, timeout_per_step)
+    return execute_macro(macro_def, timeout_per_step, variables=vars_dict)
 
 
 @mcp.tool()

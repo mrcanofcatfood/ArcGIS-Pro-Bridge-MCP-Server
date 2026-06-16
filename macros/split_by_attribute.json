@@ -1,0 +1,22 @@
+{
+  "name": "Split by Attribute",
+  "description": "Select features by attribute and split them with a cutting geometry (GeoJSON).",
+  "steps": [
+    {
+      "name": "select_by_attribute",
+      "op": "pro.selectByAttribute",
+      "args": {
+        "layer": "{{layer}}",
+        "where": "{{where}}"
+      }
+    },
+    {
+      "name": "split_features",
+      "op": "pro.splitFeatures",
+      "args": {
+        "layer": "{{layer}}",
+        "cut_geometry": "{{cut_geometry}}"
+      }
+    }
+  ]
+}

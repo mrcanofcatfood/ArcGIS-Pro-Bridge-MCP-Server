@@ -1,0 +1,32 @@
+{
+  "name": "Create Point from Address",
+  "description": "Search an address, zoom to result, and create a point feature in the target layer.",
+  "steps": [
+    {
+      "name": "search_address",
+      "op": "pro.searchAddress",
+      "args": {
+        "address": "{{address}}"
+      }
+    },
+    {
+      "name": "zoom_to_extent",
+      "op": "pro.panToExtent",
+      "args": {
+        "xmin": "{{xmin}}",
+        "ymin": "{{ymin}}",
+        "xmax": "{{xmax}}",
+        "ymax": "{{ymax}}"
+      }
+    },
+    {
+      "name": "create_point",
+      "op": "pro.createPointFeature",
+      "args": {
+        "layer": "{{target_layer}}",
+        "x": "{{x}}",
+        "y": "{{y}}"
+      }
+    }
+  ]
+}

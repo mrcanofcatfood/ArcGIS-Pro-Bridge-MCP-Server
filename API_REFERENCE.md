@@ -36,7 +36,7 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 ---
 ## Real-Time Add-In Tools (require APBridgeAddIn)
 
-**138 tools** across 21 categories.
+**144 tools** across 23 categories.
 
 > Tip: Use `pro_ping` to check if the Add-In is available. Returns `{"status": "ok"}` when connected, `{"status": "unavailable"}` otherwise.
 
@@ -76,13 +76,13 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `pro_redo_edit` | `()` | Redo the last undone edit operation in ArcGIS Pro. |
 | `pro_get_edit_state` | `()` | Get undo and redo operation counts. |
 | `pro_set_active_tool` | `(tool: 'str')` | Set the active map tool by DAML ID (e. |
-| `pro_delete_features_by_oid` | `(layer: 'str', oids: 'str')` | Delete features by comma-separated OIDs in a layer (e. |
+| `pro_delete_features_by_oid` | `(layer: 'str', oids: 'str', auto_snapshot?)` | Delete features by comma-separated OIDs in a layer (e. |
 | `pro_update_feature_attributes` | `(layer: 'str', oid: 'int', attributes: 'str')` | Update attributes of a feature by OID. |
 | `pro_create_point_feature` | `(layer: 'str', x: 'float', y: 'float', wkid?, attributes?)` | Create a point feature at (x, y) with optional WKID and JSON attributes. |
 | `pro_create_polygon_feature` | `(layer: 'str', coordinates: 'str', wkid?, attributes?)` | Create a polygon feature from space-separated 'x,y' coordinates (min 3 pairs). |
 | `pro_create_line_feature` | `(layer: 'str', coordinates: 'str', wkid?, attributes?)` | Create a line/polyline feature from space-separated 'x,y' coordinates (min 2 pairs). |
 | `pro_split_features` | `(layer: 'str', cut_geometry: 'str')` | Split features intersecting a cutting geometry (GeoJSON polyline/polygon). |
-| `pro_merge_features` | `(layer: 'str', object_ids: 'str', target_oid: 'int')` | Merge multiple features. |
+| `pro_merge_features` | `(layer: 'str', object_ids: 'str', target_oid: 'int', auto_snapshot?)` | Merge multiple features. |
 | `pro_set_snapping` | `(enabled: 'bool')` | Enable or disable map snapping. |
 | `pro_select_all` | `(layer: 'str')` | Select all features in a layer. |
 | `pro_flash_selection` | `(layer: 'str')` | Visually flash selected features in a layer on the map. |
@@ -134,12 +134,12 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 |------|-----------|-------------|
 | `pro_get_layer_schema` | `(layer: 'str')` | Get field schema (name, type, alias, length, precision, etc. |
 | `pro_add_field` | `(layer: 'str', field_name: 'str', field_type: 'str', precision?, scale?, length?)` | Add a new field to a layer's feature class. |
-| `pro_delete_field` | `(layer: 'str', field_name: 'str')` | Delete a field from a layer's feature class. |
+| `pro_delete_field` | `(layer: 'str', field_name: 'str', auto_snapshot?)` | Delete a field from a layer's feature class. |
 | `pro_calculate_field` | `(layer: 'str', field: 'str', expression: 'str', expression_type?, code_block?)` | Calculate field values using an expression (Python, SQL, etc. |
 | `pro_rename_field` | `(layer: 'str', old_name: 'str', new_name: 'str')` | Rename a field on a feature layer. |
 | `pro_add_attribute_index` | `(layer: 'str', field: 'str', index_name?, unique?)` | Add an attribute index on a field for faster queries. |
 | `pro_create_feature_class` | `(gdb_path: 'str', name: 'str', geometry_type: 'str', wkid?, fields_json?)` | Create a feature class in a geodatabase (geometry_type: Point/Polyline/Polygon). |
-| `pro_delete_feature_class` | `(path: 'str')` | Delete a feature class or table by full path. |
+| `pro_delete_feature_class` | `(path: 'str', auto_snapshot?)` | Delete a feature class or table by full path. |
 | `pro_list_subtypes` | `(layer: 'str')` | List subtypes for a feature layer. |
 | `pro_set_subtype_field` | `(layer: 'str', field: 'str')` | Set the subtype field for a feature layer. |
 
@@ -276,11 +276,18 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | `pro_plugin_query_builder` | `(layer: 'str', field: 'str', value: 'str', operator_name?)` | Query features in a layer by field value. |
 | `pro_plugin_field_calculator` | `(layer: 'str', field: 'str', expression: 'str')` | Calculate a field using a Python expression across all features in a layer. |
 
+### Python Micro-Plugins
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `pro_micro_list` | `()` | List all available Python micro-plugins from the microplugins/ directory. |
+| `pro_micro_run` | `(plugin: 'str', args?)` | Execute a Python micro-plugin by name with JSON args. |
+
 ### Workflow Macros
 
 | Tool | Signature | Description |
 |------|-----------|-------------|
-| `pro_run_macro` | `(macro: 'str', timeout_per_step?)` | Execute a workflow macro - a named sequence of pro. |
+| `pro_run_macro` | `(macro: 'str', timeout_per_step?, variables?)` | Execute a workflow macro - a named sequence of pro. |
 | `pro_list_macros` | `()` | List all built-in workflow macros available from the macros/ directory. |
 
 ### Layer Resolution
@@ -288,6 +295,15 @@ These tools work without the C# Add-In. They read `.aprx` files from disk or exe
 | Tool | Signature | Description |
 |------|-----------|-------------|
 | `pro_resolve_layer` | `(layer_hint: 'str', cutoff?)` | Resolve an approximate layer name to the exact layer name in the active map. |
+
+### Safety Net / Snapshots
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `pro_create_snapshot` | `(layer: 'str', oids?, description?)` | Create a snapshot backup of features in a layer before destructive edits. |
+| `pro_restore_snapshot` | `(snapshot_name: 'str', target_layer: 'str')` | Restore features from a snapshot back to the original layer. |
+| `pro_list_snapshots` | `()` | List all snapshots available in the snapshots. |
+| `pro_delete_snapshot` | `(snapshot_name: 'str')` | Delete a snapshot from the snapshots. |
 
 ---
 ## Return Values

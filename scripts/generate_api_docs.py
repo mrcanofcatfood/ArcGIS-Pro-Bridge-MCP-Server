@@ -118,11 +118,18 @@ TOOLS_CATEGORIES = {
         "pro_plugin_feature_inspector", "pro_plugin_query_builder",
         "pro_plugin_field_calculator",
     ],
+    "Python Micro-Plugins": [
+        "pro_micro_list", "pro_micro_run",
+    ],
     "Workflow Macros": [
         "pro_run_macro", "pro_list_macros",
     ],
     "Layer Resolution": [
         "pro_resolve_layer",
+    ],
+    "Safety Net / Snapshots": [
+        "pro_create_snapshot", "pro_restore_snapshot",
+        "pro_list_snapshots", "pro_delete_snapshot",
     ],
 }
 

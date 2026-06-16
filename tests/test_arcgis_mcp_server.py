@@ -5381,12 +5381,83 @@ class ProToolsTests(unittest.TestCase):
         from arcgis_workflows import list_builtin_macros
 
         macros = list_builtin_macros()
-        self.assertGreaterEqual(len(macros), 4)
+        self.assertGreaterEqual(len(macros), 9)
         names = [m["name"] for m in macros]
         self.assertIn("Select and Zoom", names)
         self.assertIn("Export All Layers", names)
         self.assertIn("Inspect Feature", names)
         self.assertIn("Capture and Project", names)
+        self.assertIn("Buffer and Export", names)
+        self.assertIn("Field Statistics Report", names)
+        self.assertIn("Create Point from Address", names)
+        self.assertIn("Select and Inspect", names)
+        self.assertIn("Split by Attribute", names)
+
+    def test_substitute_basic(self) -> None:
+        from arcgis_workflows import _substitute
+
+        result = _substitute("Hello {{name}}", {"name": "World"})
+        self.assertEqual(result, "Hello World")
+
+    def test_substitute_unknown_key_preserved(self) -> None:
+        from arcgis_workflows import _substitute
+
+        result = _substitute("{{missing}}", {"other": "val"})
+        self.assertEqual(result, "{{missing}}")
+
+    def test_substitute_multiple_keys(self) -> None:
+        from arcgis_workflows import _substitute
+
+        result = _substitute("{{a}} {{b}} {{a}}", {"a": "x", "b": "y"})
+        self.assertEqual(result, "x y x")
+
+    def test_substitute_step_recursive(self) -> None:
+        from arcgis_workflows import _substitute_step
+
+        step = {
+            "op": "pro.selectByAttribute",
+            "args": {"layer": "{{layer}}", "where": "ZONE = '{{zone}}'"},
+            "name": "select {{layer}}",
+        }
+        vars_dict = {"layer": "Parcels", "zone": "Residential"}
+        result = _substitute_step(step, vars_dict)
+        self.assertEqual(result["op"], "pro.selectByAttribute")
+        self.assertEqual(result["args"]["layer"], "Parcels")
+        self.assertEqual(result["args"]["where"], "ZONE = 'Residential'")
+        self.assertEqual(result["name"], "select Parcels")
+
+    def test_substitute_step_empty_vars(self) -> None:
+        from arcgis_workflows import _substitute_step
+
+        step = {"op": "pro.ping", "args": {}}
+        result = _substitute_step(step, {})
+        self.assertEqual(result, step)
+
+    def test_execute_macro_with_variables(self) -> None:
+        from arcgis_workflows import execute_macro
+
+        macro = {
+            "name": "var_test",
+            "steps": [
+                {"op": "pro.selectByAttribute", "args": {"layer": "{{layer}}", "where": "{{where}}"}},
+            ],
+        }
+        with patch("arcgis_workflows.call_addin", return_value={"count": 5}):
+            result = execute_macro(macro, variables={"layer": "Parcels", "where": "ZONE = 'R'"})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["completed"], 1)
+
+    def test_pro_run_macro_with_variables(self) -> None:
+        macro_json = '{"name":"inline","steps":[{"op":"pro.selectByAttribute","args":{"layer":"{{layer}}"}}]}'
+        with patch("arcgis_workflows.call_addin", return_value={"count": 5}):
+            result = server.pro_run_macro(macro_json, variables='{"layer": "Parcels"}')
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["completed"], 1)
+
+    def test_pro_run_macro_invalid_variables(self) -> None:
+        result = server.pro_run_macro('{"name":"t","steps":[]}', variables="not json")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("variables", result.get("message", "").lower())
 
     def test_load_macro_by_name(self) -> None:
         from arcgis_workflows import load_macro
@@ -5429,7 +5500,7 @@ class ProToolsTests(unittest.TestCase):
     def test_pro_list_macros(self) -> None:
         result = server.pro_list_macros()
         self.assertEqual(result["status"], "ok")
-        self.assertGreaterEqual(result["macro_count"], 4)
+        self.assertGreaterEqual(result["macro_count"], 9)
 
     # --- Snapshot tests ---
 
@@ -5543,6 +5614,63 @@ class ProToolsTests(unittest.TestCase):
             result = server.pro_delete_features_by_oid(layer="Test", oids="1,2,3")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(ops_called, ["pro.deleteFeaturesByOid"])
+
+
+    # --- Micro-plugin tests ---
+
+    def test_micro_list_plugins(self) -> None:
+        from arcgis_micro_plugins import _reset, list_micro_plugins
+        _reset()
+        plugins = list_micro_plugins()
+        self.assertGreaterEqual(len(plugins), 2)
+        names = [p["name"] for p in plugins]
+        self.assertIn("hello", names)
+        self.assertIn("echo", names)
+
+    def test_micro_run_hello(self) -> None:
+        from arcgis_micro_plugins import _reset, run_micro_plugin
+        _reset()
+        result = run_micro_plugin("hello", {"name": "GIS"})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result.get("greeting"), "Hello, GIS!")
+
+    def test_micro_run_echo(self) -> None:
+        from arcgis_micro_plugins import _reset, run_micro_plugin
+        _reset()
+        result = run_micro_plugin("echo", {"a": 1, "b": "two"})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result.get("echoed"), {"a": 1, "b": "two"})
+
+    def test_micro_run_not_found(self) -> None:
+        from arcgis_micro_plugins import _reset, run_micro_plugin
+        _reset()
+        result = run_micro_plugin("nonexistent", {})
+        self.assertEqual(result["status"], "error")
+        self.assertIn("not found", result.get("message", "").lower())
+
+    def test_pro_micro_list_tool(self) -> None:
+        from arcgis_micro_plugins import _reset
+        _reset()
+        result = server.pro_micro_list()
+        self.assertEqual(result["status"], "ok")
+        self.assertGreaterEqual(result["plugin_count"], 2)
+
+    def test_pro_micro_run_tool(self) -> None:
+        from arcgis_micro_plugins import _reset
+        _reset()
+        result = server.pro_micro_run("hello", '{"name": "Pro"}')
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result.get("greeting"), "Hello, Pro!")
+
+    def test_pro_micro_run_invalid_json(self) -> None:
+        result = server.pro_micro_run("hello", "not json")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("json", result.get("message", "").lower())
+
+    def test_pro_micro_run_non_dict_json(self) -> None:
+        result = server.pro_micro_run("hello", '["list"]')
+        self.assertEqual(result["status"], "error")
+        self.assertIn("object", result.get("message", "").lower())
 
 
 if __name__ == "__main__":
