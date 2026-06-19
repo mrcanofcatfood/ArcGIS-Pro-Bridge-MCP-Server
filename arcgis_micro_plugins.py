@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -36,8 +34,9 @@ def _discover() -> None:
             spec.loader.exec_module(mod)
             if hasattr(mod, "register"):
                 mod.register(_register)
-        except Exception:
-            pass
+        except Exception as exc:
+            import warnings
+            warnings.warn(f"Failed to load micro-plugin '{fpath.name}': {exc}", stacklevel=2)
     _discovered = True
 
 

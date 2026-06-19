@@ -1,0 +1,113 @@
+<UserControl x:Class="APBridgeAddIn.Dockpanes.BridgeDashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:models="clr-namespace:APBridgeAddIn.Models"
+             mc:Ignorable="d"
+             d:DesignHeight="450" d:DesignWidth="300">
+    <UserControl.Resources>
+        <Style TargetType="TextBlock" x:Key="HeaderStyle">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="LabelStyle">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#888"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="ValueStyle">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="10">
+
+            <!-- Status Header -->
+            <Border CornerRadius="6" Padding="10" Margin="0,0,0,10"
+                    Background="{Binding StatusColor, Converter={x:Null}}">
+                <StackPanel>
+                    <TextBlock Text="{Binding StatusDot}" FontSize="24"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock Text="{Binding StatusText}" FontSize="16"
+                               FontWeight="Bold" HorizontalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Connection Info -->
+            <TextBlock Text="Connection" Style="{StaticResource HeaderStyle}"/>
+            <Separator Margin="0,0,0,6"/>
+
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Text="Status:" Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}"/>
+                <TextBlock Text="{Binding StatusText}" Grid.Row="0" Grid.Column="1" Style="{StaticResource ValueStyle}" Margin="10,0,0,6"/>
+
+                <TextBlock Text="Uptime:" Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}"/>
+                <TextBlock Text="{Binding Uptime}" Grid.Row="1" Grid.Column="1" Style="{StaticResource ValueStyle}" Margin="10,0,0,6"/>
+
+                <TextBlock Text="Heartbeat:" Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}"/>
+                <TextBlock Text="{Binding LastHeartbeat}" Grid.Row="2" Grid.Column="1" Style="{StaticResource ValueStyle}" Margin="10,0,0,6"/>
+
+                <TextBlock Text="Errors:" Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}"/>
+                <TextBlock Text="{Binding ErrorDisplay}" Grid.Row="3" Grid.Column="1" Style="{StaticResource ValueStyle}" Margin="10,0,0,6" Foreground="{Binding ErrorCount, Converter={x:Null}}"/>
+            </Grid>
+
+            <!-- Actions -->
+            <TextBlock Text="Actions" Style="{StaticResource HeaderStyle}" Margin="0,10,0,0"/>
+            <Separator Margin="0,0,0,6"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <Button x:Name="PingButton" Content="Ping" Width="80" Height="28" Margin="0,0,6,0" Click="OnPingClick"/>
+                <Button x:Name="RestartButton" Content="Restart" Width="80" Height="28" Margin="6,0,6,0" Click="OnRestartClick"/>
+                <Button x:Name="ClearButton" Content="Clear" Width="80" Height="28" Margin="6,0,0,0" Click="OnClearClick"/>
+            </StackPanel>
+
+            <!-- Recent Activity -->
+            <TextBlock Text="Recent Activity" Style="{StaticResource HeaderStyle}" Margin="0,10,0,0"/>
+            <Separator Margin="0,0,0,6"/>
+            <TextBlock Text="{Binding ActivitySummary}" Style="{StaticResource LabelStyle}"/>
+
+            <ListView x:Name="ActivityList" ItemsSource="{Binding RecentActivity}"
+                      MaxHeight="300" Margin="0,6,0,0"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListView.ItemTemplate>
+                    <DataTemplate DataType="models:BridgeActivity">
+                        <Border Padding="4" Margin="0,1" CornerRadius="3"
+                                BorderBrush="#333" BorderThickness="0,0,0,1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding StatusIcon}" Grid.Column="0"
+                                           FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="{Binding Op}" FontSize="12" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding TimestampDisplay}" FontSize="10" Foreground="#888" Margin="0,0,8,0"/>
+                                        <TextBlock Text="{Binding DurationDisplay}" FontSize="10" Foreground="#888"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Error}" FontSize="10" Foreground="#F44336"
+                                               Visibility="{Binding Error, Converter={x:Null}}"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

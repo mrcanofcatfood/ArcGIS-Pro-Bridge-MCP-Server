@@ -82,7 +82,7 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) return null;
 
-                var fc = fl.GetFeatureClass();
+                using var fc = fl.GetFeatureClass();
                 var def = fc.GetDefinition();
                 var fields = def.GetFields();
                 var fieldInfos = new List<object>();

@@ -202,7 +202,7 @@ namespace APBridgeAddIn
                     .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (fl == null) return null;
 
-                var fc = fl.GetFeatureClass();
+                using var fc = fl.GetFeatureClass();
 
                 SpatialReference sr = null;
                 if (!string.IsNullOrWhiteSpace(wkidStr) && int.TryParse(wkidStr, out int wkid))
@@ -431,18 +431,23 @@ namespace APBridgeAddIn
                     if (!int.TryParse(targetOidStr, out int targetOid))
                     { warning = "targetOid must be a valid integer"; return; }
 
-                    var pyCode = "import arcpy, json\n"
-                        + $"fc_path = {System.Text.Json.JsonSerializer.Serialize(fcPath)}\n"
-                        + $"oids_json = {System.Text.Json.JsonSerializer.Serialize(objectIdsJson)}\n"
-                        + $"target_oid = {targetOid}\n"
+                    var safeTargetOid = JsonSerializer.Serialize(targetOid);
+                    var safeOidsJson = JsonSerializer.Serialize(objectIdsJson);
+                    var safeFcPath = JsonSerializer.Serialize(fcPath);
+                    var pyCode = $"import arcpy, json\n"
+                        + $"fc_path = {safeFcPath}\n"
+                        + $"oids_json = {safeOidsJson}\n"
+                        + $"target_oid = {safeTargetOid}\n"
                         + "try:\n"
                         + "    oid_list = json.loads(oids_json)\n"
+                        + "    if not isinstance(oid_list, list):\n"
+                        + "        raise ValueError('objectIds must be a JSON array')\n"
+                        + "    oid_list = [int(o) for o in oid_list]\n"
                         + "    desc = arcpy.Describe(fc_path)\n"
                         + "    oid_fld = desc.OIDFieldName\n"
                         + "    geoms = []\n"
                         + "    oid_str = ','.join(str(o) for o in oid_list)\n"
-                        + "    where = f'{oid_fld} IN ({oid_str})'\n"
-                        + "    with arcpy.da.SearchCursor(fc_path, ['SHAPE@'], where) as cur:\n"
+                        + "    with arcpy.da.SearchCursor(fc_path, ['SHAPE@'], f'{oid_fld} IN ({oid_str})') as cur:\n"
                         + "        for row in cur:\n"
                         + "            geoms.append(row[0])\n"
                         + "    if geoms:\n"

@@ -60,7 +60,19 @@ function Install {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::ExtractToDirectory($esriAddinX, $addInPath)
     }
-    Write-Output "Add-in installed. Start ArcGIS Pro to load it."
+    # Copy .esriAddInX to the add-in directory root (Pro needs this for cache management)
+    $addInRoot = Join-Path $docsPath "ArcGIS\AddIns\ArcGISPro"
+    Copy-Item $esriAddinX (Join-Path $addInRoot "APBridgeAddIn.esriAddinX") -Force
+    Write-Output "Copied .esriAddInX to $addInRoot"
+    # Ensure ArcGIS Pro's AssemblyCache is populated (Pro loads add-in DLLs from here)
+    $asmCacheDir = "$env:LOCALAPPDATA\ESRI\ArcGISPro\AssemblyCache\$addInId"
+    if (-not (Test-Path $asmCacheDir)) { $null = New-Item -ItemType Directory -Path $asmCacheDir -Force }
+    @("APBridgeAddIn.dll", "Python.Runtime.dll") | ForEach-Object {
+        $src = Join-Path $outDir $_
+        if (Test-Path $src) { Copy-Item $src (Join-Path $asmCacheDir $_) -Force }
+    }
+    Write-Output "Updated AssemblyCache at $asmCacheDir"
+    Write-Output "Add-in installed. Close Pro fully, then restart to load updated add-in."
 }
 
 function Uninstall {

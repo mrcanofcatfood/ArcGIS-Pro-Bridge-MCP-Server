@@ -57,6 +57,9 @@ namespace APBridgeAddIn
                 string.IsNullOrWhiteSpace(where))
                 return new IpcResponse(false, "args 'layer' & 'where' required", null);
 
+            if (!IsValidWhereClause(where))
+                return new IpcResponse(false, "Invalid characters in where clause", null);
+
             int count = await QueuedTask.Run(() =>
             {
                 var map = MapView.Active?.Map;
@@ -108,6 +111,8 @@ namespace APBridgeAddIn
                 var toSr = SpatialReferenceBuilder.CreateSpatialReference(toWkid);
                 var pt = MapPointBuilderEx.CreateMapPoint(x, y, fromSr);
                 var projected = GeometryEngine.Instance.Project(pt, toSr) as MapPoint;
+                if (projected == null)
+                    return Task.FromResult(new IpcResponse(false, "Projection returned null", null));
 
                 return Task.FromResult(new IpcResponse(true, null, new
                 {
@@ -119,8 +124,8 @@ namespace APBridgeAddIn
             }
             catch (Exception ex)
             {
-            return Task.FromResult(new IpcResponse(false, $"Projection failed: {SanitizeException(ex)}", null));
-        }
+                return Task.FromResult(new IpcResponse(false, $"Projection failed: {SanitizeException(ex)}", null));
+            }
         }
 
         private static Task<IpcResponse> HandleSetStatusBarMessage(IpcRequest req, CancellationToken ct)

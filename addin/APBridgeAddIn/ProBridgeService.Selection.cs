@@ -22,6 +22,16 @@ namespace APBridgeAddIn
 {
     internal partial class ProBridgeService : IDisposable
     {
+        private static bool IsValidWhereClause(string where)
+        {
+            if (string.IsNullOrWhiteSpace(where)) return false;
+            var dangerous = new[] { "DROP ", "ALTER ", "DELETE ", "INSERT ", "CREATE ", "EXEC ", "--", "/*", "*/", "xp_" };
+            var upper = where.ToUpperInvariant();
+            foreach (var d in dangerous)
+                if (upper.Contains(d)) return false;
+            return true;
+        }
+
         private static async Task<IpcResponse> HandleGetSelectionCount(IpcRequest req, CancellationToken ct)
         {
             if (req.Args == null ||
@@ -50,6 +60,9 @@ namespace APBridgeAddIn
                 !req.Args.TryGetValue("where", out string where) ||
                 string.IsNullOrWhiteSpace(where))
                 return new IpcResponse(false, "args 'layer' & 'where' required", null);
+
+            if (!IsValidWhereClause(where))
+                return new IpcResponse(false, "Invalid characters in where clause", null);
 
             await QueuedTask.Run(() =>
             {
@@ -351,6 +364,9 @@ namespace APBridgeAddIn
             req.Args.TryGetValue("fields", out string fields);
             req.Args.TryGetValue("maxFeatures", out string maxFcStr);
             int maxFeatures = string.IsNullOrWhiteSpace(maxFcStr) ? 1000 : int.Parse(maxFcStr);
+
+            if (!string.IsNullOrWhiteSpace(where) && !IsValidWhereClause(where))
+                return new IpcResponse(false, "Invalid characters in where clause", null);
 
             var fieldList = string.IsNullOrWhiteSpace(fields)
                 ? null

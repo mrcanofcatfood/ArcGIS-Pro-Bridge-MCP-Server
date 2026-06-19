@@ -70,9 +70,13 @@ namespace APBridgeAddIn
                 var argsList = new List<string> { fcPath, outputPath };
                 if (!string.IsNullOrWhiteSpace(oidsStr))
                 {
-                    // Build a where clause from the OIDs
-                    var oids = oidsStr.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (oids.Length > 0)
+                    var oids = oidsStr
+                        .Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(o => long.TryParse(o.Trim(), out long id) ? id : (long?)null)
+                        .Where(id => id.HasValue)
+                        .Select(id => id.Value.ToString())
+                        .ToList();
+                    if (oids.Count > 0)
                     {
                         var where = "OBJECTID IN (" + string.Join(",", oids) + ")";
                         argsList.Add(where);

@@ -133,6 +133,8 @@ namespace APBridgeAddIn
         private static string EscapeCsvValue(string value)
         {
             if (string.IsNullOrEmpty(value)) return "";
+            if (value.Length > 0 && (value[0] == '=' || value[0] == '+' || value[0] == '-' || value[0] == '@' || value[0] == '\t'))
+                value = "'" + value;
             if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
                 return $"\"{value.Replace("\"", "\"\"")}\"";
             return value;

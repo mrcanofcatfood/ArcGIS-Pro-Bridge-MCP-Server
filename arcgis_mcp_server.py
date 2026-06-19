@@ -22,19 +22,6 @@ from arcgis_mcp_named_pipe import (
     AddInOperationError,
     call_addin,
 )
-from arcgis_name_resolver import (
-    resolve_layer_name,
-    resolve_layer_with_details,
-)
-from arcgis_micro_plugins import (
-    list_micro_plugins,
-    run_micro_plugin,
-)
-from arcgis_workflows import (
-    execute_macro,
-    list_builtin_macros,
-    load_macro,
-)
 from arcgis_mcp_resources import (
     build_gdb_schema_resource_uri,
     build_project_context_resource_uri,
@@ -50,6 +37,13 @@ from arcgis_mcp_services import (
     read_project_context,
     read_project_layers,
     run_arcpy_runtime_check,
+)
+from arcgis_micro_plugins import (
+    list_micro_plugins,
+    run_micro_plugin,
+)
+from arcgis_name_resolver import (
+    resolve_layer_with_details,
 )
 from arcgis_runtime_utils import (
     build_arcgis_subprocess_env,
@@ -81,6 +75,11 @@ from arcgis_script_templates import (
     build_sensitivity_check_code,
     build_validate_project_data_code,
     build_weighted_suitability_code,
+)
+from arcgis_workflows import (
+    execute_macro,
+    list_builtin_macros,
+    load_macro,
 )
 
 try:
@@ -1631,6 +1630,12 @@ def pro_ping() -> dict[str, Any]:
 
 
 @mcp.tool()
+def pro_admin_metrics() -> dict[str, Any]:
+    """Get bridge metrics: total calls, recent activity log, uptime, and server thread status."""
+    return _call_addin("pro.admin.metrics")
+
+
+@mcp.tool()
 def pro_get_active_map_name() -> dict[str, Any]:
     """Get the name of the active map in ArcGIS Pro."""
     return _call_addin("pro.getActiveMapName")
@@ -2310,7 +2315,6 @@ def pro_merge_features(
     """Merge multiple features. object_ids: JSON array of OIDs, target_oid: survivor.
     Set auto_snapshot=True to automatically create a backup before merging."""
     if auto_snapshot:
-        # object_ids is JSON array like "[1,2,3]" → convert to "1,2,3"
         try:
             parsed = json.loads(object_ids)
             if isinstance(parsed, list):
@@ -2318,6 +2322,8 @@ def pro_merge_features(
                 _call_addin("pro.createSnapshot", {"layer": layer, "oids": csv_oids})
         except (json.JSONDecodeError, TypeError):
             _call_addin("pro.createSnapshot", {"layer": layer, "oids": object_ids})
+            return {"status": "error",
+"message": "object_ids must be a valid JSON array like '[1,2,3]'"}
     return _call_addin(
         "pro.mergeFeatures",
         {"layer": layer, "objectIds": object_ids, "targetOid": str(target_oid)},

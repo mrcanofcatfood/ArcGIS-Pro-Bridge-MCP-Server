@@ -1,4 +1,4 @@
-﻿using ArcGIS.Core.CIM;
+using ArcGIS.Core.CIM;
 using ArcGIS.Core.Data;
 using ArcGIS.Core.Geometry;
 using ArcGIS.Desktop.Core;
@@ -12,7 +12,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Collections.Concurrent;
 using System.Linq;
+using APBridgeAddIn.Models;
 using System.Text;
 using System.Text.Json;
 using System.Reflection;
@@ -27,6 +29,8 @@ namespace APBridgeAddIn
         private readonly string _pipeName;
         private Thread _serverThread;
         private volatile bool _stopped;
+        private long _totalCalls;
+        private readonly ConcurrentQueue<BridgeActivity> _activityQueue = new();
 
         private static readonly Dictionary<string, string> _knownDockPanes = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -59,6 +63,24 @@ namespace APBridgeAddIn
         };
 
         public ProBridgeService(string pipeName) => _pipeName = pipeName;
+
+        public void RecordActivity(BridgeActivity activity)
+        {
+            Interlocked.Increment(ref _totalCalls);
+            _activityQueue.Enqueue(activity);
+            while (_activityQueue.Count > 1000)
+                _activityQueue.TryDequeue(out _);
+        }
+
+        public List<BridgeActivity> GetRecentActivity(int count)
+            => _activityQueue.Reverse().Take(count).ToList();
+
+        public void ClearActivity()
+        {
+            while (_activityQueue.TryDequeue(out _)) { }
+        }
+
+        public bool PingSync() => !_stopped;
 
         public void Start()
         {
@@ -140,17 +162,31 @@ namespace APBridgeAddIn
                         }
                         catch
                         {
-                            await writer.WriteLineAsync(JsonSerializer.Serialize(new IpcResponse(false, "parse error", null)));
+                            var errResp = new IpcResponse(false, "parse error", null);
+                            await writer.WriteLineAsync(JsonSerializer.Serialize(errResp));
+                            RecordActivity(new BridgeActivity { Op = "(parse)", Timestamp = DateTime.UtcNow, Ok = false, Error = "parse error" });
                             continue;
                         }
 
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
                         try
                         {
                             var resp = await HandleAsync(req, CancellationToken.None);
+                            sw.Stop();
+                            RecordActivity(new BridgeActivity
+                            {
+                                Op = req.Op,
+                                Timestamp = DateTime.UtcNow,
+                                DurationMs = sw.ElapsedMilliseconds,
+                                Ok = resp.Ok,
+                                Error = resp.Error
+                            });
                             await writer.WriteLineAsync(JsonSerializer.Serialize(resp));
                         }
                         catch (Exception ex)
                         {
+                            sw.Stop();
+                            RecordActivity(new BridgeActivity { Op = req.Op, Timestamp = DateTime.UtcNow, DurationMs = sw.ElapsedMilliseconds, Ok = false, Error = ex.Message });
                             try { await writer.WriteLineAsync(JsonSerializer.Serialize(new IpcResponse(false, SanitizeException(ex), null))); } catch { }
                         }
                     }
@@ -314,13 +350,28 @@ namespace APBridgeAddIn
             ["pro.restoreSnapshot"] = HandleRestoreSnapshot,
             ["pro.listSnapshots"] = HandleListSnapshots,
             ["pro.deleteSnapshot"] = HandleDeleteSnapshot,
+            ["pro.admin.ping"] = HandlePing,
+            ["pro.admin.metrics"] = async (req, ct) => {
+                var bridge = Module1.Current?.GetBridgeService();
+                if (bridge == null) return new IpcResponse(false, "Bridge service not available", null);
+                var recent = bridge.GetRecentActivity(20);
+                return new IpcResponse(true, null, new {
+                    totalCalls = System.Threading.Interlocked.Read(ref bridge._totalCalls),
+                    recentActivity = recent,
+                    uptime = Module1.Current.GetUptime(),
+                    serverThreadAlive = bridge._serverThread?.IsAlive ?? false,
+                });
+            },
         };
 
         private static async Task<IpcResponse> HandleAsync(IpcRequest req, CancellationToken ct)
         {
             if (_handlers.TryGetValue(req.Op, out var handler))
                 return await handler(req, ct);
-            return new IpcResponse(false, $"op not found: {req.Op}", null);
+            // Diagnose: show a few sample keys from the dictionary
+            var sampleKeys = string.Join(", ", _handlers.Keys.Take(5));
+            var totalKeys = _handlers.Count;
+            return new IpcResponse(false, $"op not found: '{req.Op}' (dict has {totalKeys} keys, e.g.: {sampleKeys})", null);
         }
 
         // --- Phase 3: In-Process Python Execution (Proof of Concept) ---

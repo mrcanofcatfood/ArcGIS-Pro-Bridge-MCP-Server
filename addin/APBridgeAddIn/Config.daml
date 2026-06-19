@@ -18,13 +18,22 @@
       <groups>
         <group id="APBridgeAddIn_Group1" caption="Bridge Control" appearsOnAddInTab="true">
           <button refID="APBridgeAddIn_Button1" size="large" />
+          <button refID="APBridgeAddIn_Button2" size="large" />
         </group>
       </groups>
       <controls>
-        <button id="APBridgeAddIn_Button1" caption="Restart Bridge Server" className="Button1" loadOnClick="true" smallImage="GenericButtonBlue16" largeImage="GenericButtonBlue32">
+        <button id="APBridgeAddIn_Button1" caption="Restart Bridge" className="Button1" loadOnClick="true" smallImage="GenericButtonBlue16" largeImage="GenericButtonBlue32">
           <tooltip heading="ArcGIS Pro Bridge">Restart the Named Pipe bridge server for MCP integration.<disabledText /></tooltip>
+        </button>
+        <button id="APBridgeAddIn_Button2" caption="Dashboard" className="ShowDashboardButton" loadOnClick="true" smallImage="GenericButtonBlue16" largeImage="GenericButtonBlue32">
+          <tooltip heading="Bridge Dashboard">Open the live connection dashboard showing bridge status, activity log, and heartbeat.<disabledText /></tooltip>
         </button>
       </controls>
     </insertModule>
   </modules>
+  <dockPanes>
+    <dockPane id="APBridgeAddIn_BridgeDashboard" caption="ArcGIS Bridge Dashboard" className="APBridgeAddIn.Dockpanes.BridgeDashboardDockpane" baseType="Framework.DockPane">
+      <content className="APBridgeAddIn.Dockpanes.BridgeDashboardView" />
+    </dockPane>
+  </dockPanes>
 </ArcGIS>
